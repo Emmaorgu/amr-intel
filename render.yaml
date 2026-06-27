@@ -1,5 +1,5 @@
 # render.yaml — AMR-Sentinel infrastructure as code
-# Deploy with: connect GitHub repo to Render, it reads this file automatically
+# All services on Render free tier
 # Docs: https://render.com/docs/blueprint-spec
 
 services:
@@ -34,24 +34,26 @@ services:
           name: amr-sentinel-db
           property: database
       - key: ANTHROPIC_API_KEY
-        sync: false  # set manually in Render dashboard
+        sync: false
       - key: NCBI_SSL_VERIFY
         value: "false"
       - key: API_KEY
-        value: ""  # empty = no auth required for demo
+        value: ""
       - key: CORS_ORIGINS
         value: "https://amr-intel.com,https://www.amr-intel.com,https://amr-sentinel-dashboard.onrender.com"
       - key: PYTHON_VERSION
-        value: "3.11"  # Render supports 3.11; our code is 3.11+ compatible
+        value: "3.11"
 
-  # ─── 2. Orchestrator Background Worker ───────────────────────────────────
-  - type: worker
-    name: amr-sentinel-orchestrator
+  # ─── 2. Orchestrator — Cron Job (runs every 6 hours, free tier) ──────────
+  # Cron jobs are supported on free tier. Runs --run-once and exits cleanly.
+  - type: cron
+    name: amr-sentinel-pipeline
     runtime: python
     region: oregon
     plan: free
+    schedule: "0 */6 * * *"
     buildCommand: pip install -r requirements-render.txt
-    startCommand: python -m amr_sentinel.orchestrator --schedule "0 */6 * * *"
+    startCommand: python -m amr_sentinel.orchestrator --run-once --skip-ingestion
     envVars:
       - key: DB_USER
         fromDatabase:
@@ -77,14 +79,12 @@ services:
         sync: false
       - key: NCBI_SSL_VERIFY
         value: "false"
-      - key: SKIP_TFT_TRAINING
-        value: "true"  # use forecast cache only — TFT runs locally
       - key: MAX_STEWARDSHIP_ALERTS
-        value: "20"  # conservative on hosted infra
+        value: "20"
       - key: PYTHON_VERSION
         value: "3.11"
 
-  # ─── 3. React Dashboard (Static Site) ────────────────────────────────────
+  # ─── 3. React Dashboard (Static Site — always free) ──────────────────────
   - type: web
     name: amr-sentinel-dashboard
     runtime: static
@@ -97,7 +97,7 @@ services:
     routes:
       - type: rewrite
         source: /*
-        destination: /index.html  # SPA routing — all paths → index.html
+        destination: /index.html
 
 # ─── PostgreSQL Database ────────────────────────────────────────────────────
 databases:
