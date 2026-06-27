@@ -21,11 +21,11 @@ alembic==1.18.4
 APScheduler==3.11.2
 
 # Data
-pandas==3.0.3
-numpy==2.5.0
-scipy==1.18.0
-scikit-learn==1.9.0
-statsmodels==0.14.6
+pandas==2.2.3
+numpy==1.26.4
+scipy==1.13.1
+scikit-learn==1.5.2
+statsmodels==0.14.4
 
 # Evidence linker / RAG
 faiss-cpu==1.14.3

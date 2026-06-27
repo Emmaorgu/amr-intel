@@ -87,7 +87,7 @@ services:
   - type: web
     name: amr-sentinel-dashboard
     runtime: static
-    buildCommand: cd dashboard && npm install && npm run build
+    buildCommand: npm --prefix dashboard install && npm --prefix dashboard run build
     staticPublishPath: dashboard/dist
     headers:
       - path: /*
