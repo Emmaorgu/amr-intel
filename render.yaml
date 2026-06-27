@@ -50,7 +50,6 @@ services:
     name: amr-sentinel-pipeline
     runtime: python
     region: oregon
-    plan: free
     schedule: "0 */6 * * *"
     buildCommand: pip install -r requirements-render.txt
     startCommand: python -m amr_sentinel.orchestrator --run-once --skip-ingestion
