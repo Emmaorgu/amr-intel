@@ -53,5 +53,6 @@ debug_ci2.py
 diagnose_genomic_insert.py
 inspect_ndaro_header.py
 test_connection.py
-package.json
-package-lock.json
+# Root-level package files only (not dashboard/)
+/package.json
+/package-lock.json
