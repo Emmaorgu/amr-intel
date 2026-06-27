@@ -88,7 +88,6 @@ services:
   - type: web
     name: amr-sentinel-dashboard
     runtime: static
-    region: oregon
     plan: free
     buildCommand: cd dashboard && npm install && npm run build
     staticPublishPath: dashboard/dist
