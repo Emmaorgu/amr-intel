@@ -1,0 +1,57 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Data — excluded from repo (large files, sensitive data)
+data/
+lightning_logs/
+logs/
+
+# ML model artifacts (large)
+*.ckpt
+*.pkl
+*.pt
+*.pth
+
+# Node
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Alembic — keep migrations, not local DB config override
+# alembic.ini is kept (credentials are env-var driven)
+
+# Temporary debug scripts at project root
+check_ci.py
+check_nigeria_log.py
+check_queue.py
+check_scores.py
+debug_ci.py
+debug_ci2.py
+diagnose_genomic_insert.py
+inspect_ndaro_header.py
+test_connection.py
+package.json
+package-lock.json

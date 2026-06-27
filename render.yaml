@@ -1,0 +1,109 @@
+# render.yaml — AMR-Sentinel infrastructure as code
+# Deploy with: connect GitHub repo to Render, it reads this file automatically
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  # ─── 1. FastAPI Backend ──────────────────────────────────────────────────
+  - type: web
+    name: amr-sentinel-api
+    runtime: python
+    region: oregon
+    plan: starter  # $7/mo — always-on, no cold starts
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: python -m uvicorn amr_sentinel.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DB_USER
+        fromDatabase:
+          name: amr-sentinel-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: amr-sentinel-db
+          property: password
+      - key: DB_HOST
+        fromDatabase:
+          name: amr-sentinel-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: amr-sentinel-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: amr-sentinel-db
+          property: database
+      - key: ANTHROPIC_API_KEY
+        sync: false  # set manually in Render dashboard
+      - key: NCBI_SSL_VERIFY
+        value: "false"
+      - key: API_KEY
+        value: ""  # empty = no auth required for demo
+      - key: CORS_ORIGINS
+        value: "https://amr-intel.com,https://www.amr-intel.com,https://amr-sentinel-dashboard.onrender.com"
+      - key: PYTHON_VERSION
+        value: "3.11"  # Render supports 3.11; our code is 3.11+ compatible
+
+  # ─── 2. Orchestrator Background Worker ───────────────────────────────────
+  - type: worker
+    name: amr-sentinel-orchestrator
+    runtime: python
+    region: oregon
+    plan: starter  # $7/mo — needs to stay running for APScheduler
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: python -m amr_sentinel.orchestrator --schedule "0 */6 * * *"
+    envVars:
+      - key: DB_USER
+        fromDatabase:
+          name: amr-sentinel-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: amr-sentinel-db
+          property: password
+      - key: DB_HOST
+        fromDatabase:
+          name: amr-sentinel-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: amr-sentinel-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: amr-sentinel-db
+          property: database
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NCBI_SSL_VERIFY
+        value: "false"
+      - key: SKIP_TFT_TRAINING
+        value: "true"  # use forecast cache only — TFT runs locally
+      - key: MAX_STEWARDSHIP_ALERTS
+        value: "20"  # conservative on hosted infra
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  # ─── 3. React Dashboard (Static Site) ────────────────────────────────────
+  - type: web
+    name: amr-sentinel-dashboard
+    runtime: static
+    region: oregon
+    plan: free
+    buildCommand: cd dashboard && npm install && npm run build
+    staticPublishPath: dashboard/dist
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html  # SPA routing — all paths → index.html
+
+# ─── PostgreSQL Database ────────────────────────────────────────────────────
+databases:
+  - name: amr-sentinel-db
+    databaseName: amr_sentinel
+    region: oregon
+    plan: starter  # $7/mo — persistent, no 90-day expiry

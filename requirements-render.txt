@@ -1,0 +1,51 @@
+# AMR-Sentinel — Render deployment requirements
+# Excludes PyTorch/TFT (too large for Render free/starter tier).
+# The orchestrator on Render uses the forecast cache (forecasts_*.pkl)
+# committed to the repo — it never runs TFT retraining directly.
+# TFT retraining runs locally; cache is committed and deployed.
+
+# Core API + agent stack
+anthropic==0.111.0
+fastapi==0.138.0
+uvicorn==0.49.0
+starlette==1.3.1
+pydantic==2.13.4
+pydantic_core==2.46.4
+
+# Database
+sqlalchemy==2.0.51
+psycopg2-binary==2.9.12
+alembic==1.18.4
+
+# Scheduler
+APScheduler==3.11.2
+
+# Data
+pandas==3.0.3
+numpy==2.5.0
+scipy==1.18.0
+scikit-learn==1.9.0
+statsmodels==0.14.6
+
+# Evidence linker / RAG
+faiss-cpu==1.14.3
+sentence-transformers==5.6.0
+transformers==5.12.1
+tokenizers==0.22.2
+
+# HTTP / async
+httpx==0.28.1
+aiohttp==3.14.1
+requests==2.34.2
+
+# NCBI / bioinformatics
+biopython==1.87
+
+# Utilities
+python-dotenv==1.2.2
+click==8.4.1
+tqdm==4.68.3
+PyYAML==6.0.3
+python-dateutil==2.9.0.post0
+tzlocal==5.4.3
+packaging==26.2
