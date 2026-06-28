@@ -1187,7 +1187,7 @@ function AlertInvestigation({ alert: init }) {
                 {isGenomic ? (alert.gene_name || "Genomic Signal") : (alert.antibiotic_name + " Resistance")}
               </span>
             </h1>
-            <div style={{fontSize:12,color:C.muted,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <div style={{fontSize:12,color:C.muted,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:8}}>
               {getFlagUrl(alert.country_iso3) && <img src={getFlagUrl(alert.country_iso3)} width="14" height="10" style={{borderRadius:1}} alt=""/>}
               {countryName(alert.country_iso3)} ({alert.country_iso3})
               <span style={{color:C.border}}>·</span>
@@ -1195,6 +1195,17 @@ function AlertInvestigation({ alert: init }) {
               <span style={{color:C.border}}>·</span>
               <span style={{color:trajectoryColor,fontWeight:600}}>{"Trajectory: " + trajectoryLabel}</span>
             </div>
+            {/* One-sentence executive summary */}
+            {!isGenomic && (
+              <div style={{fontSize:13,color:C.mutedHigh,lineHeight:1.6,maxWidth:580,fontStyle:"italic",borderLeft:"2px solid " + accentColor + "60",paddingLeft:10}}>
+                {pName + " resistance to " + (alert.antibiotic_name||"this antibiotic") + " in " + countryName(alert.country_iso3) + " has exceeded the forecast by " + devPp + " percentage points" + (outsidePI ? ", is outside the 80% prediction interval," : "") + " and is " + (trajectoryLabel === "Endemic Critical" ? "at a level requiring immediate national stewardship and infection-control response." : trajectoryLabel === "Escalating" ? "escalating at a rate that warrants urgent surveillance attention and stewardship review." : "emerging and should be monitored closely by national AMR authorities.")}
+              </div>
+            )}
+            {isGenomic && (
+              <div style={{fontSize:13,color:C.mutedHigh,lineHeight:1.6,maxWidth:580,fontStyle:"italic",borderLeft:"2px solid " + C.teal + "60",paddingLeft:10}}>
+                {"Genomic surveillance has detected " + (alert.gene_name||"a resistance gene") + " in " + countryName(alert.country_iso3) + " with " + (alert.isolate_count||0).toLocaleString() + " sequenced isolates" + (alert.doubling_time_years && alert.doubling_time_years < 2 ? ", expanding at sub-2-year doubling time — a pre-phenotypic signal requiring immediate genomic surveillance escalation." : " — a pre-phenotypic signal warranting enhanced genomic surveillance.")}
+              </div>
+            )}
           </div>
 
           {/* Metric cards */}
@@ -1207,10 +1218,10 @@ function AlertInvestigation({ alert: init }) {
                   {label:"Signal Score",      value:alert.severity_score + "/100", color:accentColor},
                 ]
               : [
-                  {label:"Observed",           value:obsRate + "%",      color:(alert.current_resistance||0)>=.5?C.red:C.amber},
-                  {label:"Forecast Resistance",value:expRate + "%",      color:C.mutedHigh},
-                  {label:"Above Forecast",     value:"+" + devPp + "pp", color:C.red},
-                  {label:"Signal Score",      value:alert.severity_score + "/100", color:accentColor},
+                  {label:"Observed Resistance", value:obsRate + "%",      color:(alert.current_resistance||0)>=.5?C.red:C.amber},
+                  {label:"Forecast Resistance", value:expRate + "%",      color:C.mutedHigh},
+                  {label:"Above Forecast",      value:"+" + devPp + "pp", color:C.red},
+                  {label:"Confidence",          value:"High",             color:C.green},
                 ]
             ).map(m=>(
               <div key={m.label} style={{background:C.surfaceHigh,borderRadius:6,padding:"10px 8px",border:"1px solid " + C.border}}>
@@ -1259,7 +1270,7 @@ function AlertInvestigation({ alert: init }) {
 
       {/* ── WHY THIS ALERT? — Evidence card ── */}
       <div style={{background:C.surfaceHigh,border:"1px solid " + accentColor + "40",borderRadius:8,padding:16,marginBottom:16}}>
-        <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:12}}>Why This Alert? — Primary Signal Drivers</div>
+        <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:12}}>Why AMR-Intel Triggered This Alert</div>
         <div style={{display:"flex",flexDirection:"column",gap:7}}>
           {drivers.map((d,i)=>(
             <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10}}>
