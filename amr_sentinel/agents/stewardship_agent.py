@@ -156,23 +156,49 @@ def _build_system_prompt() -> str:
     """
     return """You are the intelligence analysis engine for AMR-Sentinel — an autonomous antimicrobial resistance (AMR) surveillance network.
 
-Your role is to generate public AMR intelligence bulletins. These are read by:
-- Infectious disease physicians and clinical microbiologists
-- Hospital antimicrobial stewardship teams
-- National public health authorities and ministries of health
-- AMR researchers and epidemiologists
-- Global health policy officials
+Your output is read by infectious disease physicians, hospital stewardship teams, national public health authorities, ministries of health, and global health policy officials.
 
-YOUR OUTPUT IS NOT CLINICAL ADVICE FOR INDIVIDUAL PATIENTS.
-It is population-level surveillance intelligence — the same category as an ECDC Rapid Risk Assessment, a WHO situation report, or a CDC Health Advisory.
+THIS IS NOT CLINICAL ADVICE FOR INDIVIDUAL PATIENTS.
+It is population-level surveillance intelligence — the same category as an ECDC Rapid Risk Assessment or WHO situation report.
 
-Tone: Authoritative. Evidence-based. Clinically precise. Concise.
-Format: Structured plain text. No markdown headers. No bullet lists. Paragraph form.
-Length: 3–4 paragraphs for critical alerts. 2–3 paragraphs for warn alerts.
+OUTPUT FORMAT — follow this structure exactly. Use these exact section headers in ALL CAPS:
 
-Never recommend a specific drug for a specific patient.
-Always frame findings at the population and stewardship level.
-Always situate the signal in global context where relevant."""
+EXECUTIVE SUMMARY
+One to two sentences. State what was detected, where, and why it matters. Be direct.
+
+SITUATION ASSESSMENT
+Describe what the data shows. Separate observation from inference:
+- State the observed resistance rate and how it compares to the model expectation.
+- Describe the trajectory (emerging / escalating / endemic critical / improving).
+- Note any statistical significance (prediction interval deviation if provided).
+Do not state causes here — only what the data shows.
+
+POSSIBLE DRIVERS
+List 3-4 plausible epidemiological explanations as hypotheses, not conclusions.
+Use language like "may reflect", "consistent with", "could indicate".
+Never overstate certainty.
+
+RECOMMENDED ACTIONS
+Bullet-point list of specific, actionable public health and stewardship responses.
+Address: surveillance, laboratory, clinical guidelines, IPC, regional coordination.
+Be specific — not generic advice.
+
+CONFIDENCE ASSESSMENT
+One sentence stating confidence level (High/Moderate/Low) and the primary reason.
+Example: "Confidence: High — supported by multi-year ECDC surveillance data and forecast deviation outside 80% prediction interval."
+
+STRATEGIC IMPLICATIONS
+One short paragraph on what this signal means for the region and global AMR picture.
+Keep to 2-3 sentences. Do not repeat what was already said.
+
+RULES:
+- Never recommend a specific drug for a specific patient
+- Separate observation from inference throughout
+- Use hedged language for hypotheses: "may", "could", "consistent with", "suggests"
+- Do not use markdown symbols (no **, no ##, no *)
+- Section headers must be written in ALL CAPS exactly as shown above
+- Each section must be present, even if brief
+- Total length: 350-500 words for critical alerts, 200-300 words for warn alerts"""
 
 
 def _build_user_prompt(alert) -> str:
@@ -202,26 +228,34 @@ def _build_user_prompt(alert) -> str:
     trend_str = alert.trend_direction.capitalize()
 
     tier_instruction = (
-        "This is a CRITICAL-tier signal. Provide a full 3–4 paragraph bulletin "
-        "covering: (1) signal summary and clinical significance, (2) trajectory "
-        "analysis and what the multi-year pattern implies, (3) stewardship and "
-        "public health implications, (4) global context and what health authorities "
-        "should monitor."
+        "Tier: CRITICAL. Use the full 6-section intelligence report format. "
+        "All sections required. Target 400-500 words total."
         if alert.severity_tier == "critical"
-        else "This is a WARN-tier signal. Provide a focused 2–3 paragraph bulletin "
-        "covering: (1) signal summary and clinical significance, (2) stewardship "
-        "implications and what to monitor."
+        else "Tier: WARN. Use the full 6-section intelligence report format. "
+        "Keep each section concise. Target 250-320 words total."
     )
 
-    return f"""Generate an AMR-Sentinel Intelligence Bulletin for the following resistance signal.
+    # Build prediction interval context if available
+    pi_context = ""
+    if hasattr(alert, "forecast_lower_80") and alert.forecast_lower_80 is not None:
+        lo = alert.forecast_lower_80 * 100
+        hi = alert.forecast_upper_80 * 100 if alert.forecast_upper_80 else lo
+        observed = alert.current_resistance * 100
+        outside = observed > hi
+        pi_context = (
+            f"\n- 80% Prediction Interval: {lo:.1f}% – {hi:.1f}%"
+            f"\n- Observed vs Prediction Interval: {'OUTSIDE — statistically significant anomaly' if outside else 'Within expected range'}"
+        )
+
+    return f"""Generate an AMR-Sentinel Intelligence Report for the following resistance signal.
 
 SIGNAL DATA:
 - Pathogen: {alert.pathogen_name}
 - Antibiotic: {alert.antibiotic_name} ({alert.antibiotic_class})
 - Country: {alert.country_iso3} ({region_name})
 - Observed resistance rate: {resistance_pct} (year(s): {years_str})
-- Model forecast had predicted: {forecast_pct}
-- Deviation above forecast: +{deviation_pct} percentage points
+- Model expectation: {forecast_pct}
+- Difference above expectation: +{deviation_pct} percentage points{pi_context}
 - Trajectory: {trend_str}
 - Severity score: {alert.severity_score}/100 ({alert.severity_tier.upper()})
 
@@ -231,7 +265,7 @@ ANTIBIOTIC CLASS CONTEXT:
 INSTRUCTION:
 {tier_instruction}
 
-Write the bulletin now. Begin directly with the intelligence content — no preamble, no title."""
+Write the intelligence report now. Start immediately with EXECUTIVE SUMMARY — no preamble, no title, no introductory sentences."""
 
 
 # ---------------------------------------------------------------------------
