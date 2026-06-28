@@ -1207,9 +1207,9 @@ function AlertInvestigation({ alert: init }) {
                   {label:"Signal Score",      value:alert.severity_score + "/100", color:accentColor},
                 ]
               : [
-                  {label:"Observed",          value:obsRate + "%",   color:(alert.current_resistance||0)>=.5?C.red:C.amber},
-                  {label:"Model Expectation", value:expRate + "%",   color:C.mutedHigh},
-                  {label:"Difference",        value:"+" + devPp + "pp", color:C.red},
+                  {label:"Observed",           value:obsRate + "%",      color:(alert.current_resistance||0)>=.5?C.red:C.amber},
+                  {label:"Forecast Resistance",value:expRate + "%",      color:C.mutedHigh},
+                  {label:"Above Forecast",     value:"+" + devPp + "pp", color:C.red},
                   {label:"Signal Score",      value:alert.severity_score + "/100", color:accentColor},
                 ]
             ).map(m=>(
@@ -1269,6 +1269,62 @@ function AlertInvestigation({ alert: init }) {
           ))}
         </div>
       </div>
+
+      {/* ── Recommended Actions ── */}
+      {!isGenomic && (
+        <div style={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:8,padding:16,marginBottom:16}}>
+          <div style={{fontSize:9,color:C.green,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:14}}>Recommended Actions</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+            {[
+              {
+                tier:"Immediate",
+                color:C.red,
+                actions:[
+                  "Notify Ministry of Health / National AMR authority",
+                  "Review empiric treatment guidelines for " + pName,
+                  "Alert hospital infection control teams",
+                  "Increase laboratory susceptibility testing",
+                ]
+              },
+              {
+                tier:"Within 30 Days",
+                color:C.amber,
+                actions:[
+                  "Sequence representative isolates for resistance gene profiling",
+                  "Review IPC compliance in affected facilities",
+                  "Expand surveillance to neighbouring regions",
+                  "Cross-reference WHO GLASS for regional trends",
+                ]
+              },
+              {
+                tier:"Ongoing Monitor",
+                color:C.teal,
+                actions:[
+                  "Track resistance trajectory monthly",
+                  "Monitor epidemiologically linked countries",
+                  "Align with ECDC / WHO regional surveillance updates",
+                  "Report to national AMR stewardship programme",
+                ]
+              },
+            ].map(group=>(
+              <div key={group.tier}>
+                <div style={{fontSize:9,color:group.color,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",marginBottom:8,paddingBottom:5,borderBottom:"1px solid " + group.color + "30"}}>{group.tier}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {group.actions.map((a,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"flex-start",gap:7}}>
+                      <span style={{color:group.color,fontSize:10,flexShrink:0,marginTop:2}}>◆</span>
+                      <span style={{fontSize:11,color:C.mutedHigh,lineHeight:1.5}}>{a}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:12,paddingTop:10,borderTop:"1px solid " + C.border,fontSize:9,color:C.muted,fontStyle:"italic"}}>
+            Actions are surveillance intelligence guidance, not clinical prescribing advice. Specific stewardship protocols depend on local guidelines and patient context.
+          </div>
+        </div>
+      )}
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 270px",gap:16}}>
         <div>
@@ -1345,8 +1401,8 @@ function AlertInvestigation({ alert: init }) {
                           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
                             {[
                               {l:"Observed Resistance", v:obsRate+"%",   c:(alert.current_resistance||0)>=.5?C.red:C.amber},
-                              {l:"Model Expectation",   v:expRate+"%",   c:C.mutedHigh},
-                              {l:"Difference",          v:"+"+devPp+"pp",c:C.red},
+                              {l:"Forecast Resistance", v:expRate+"%",   c:C.mutedHigh},
+                              {l:"Above Forecast",      v:"+"+devPp+"pp",c:C.red},
                               {l:"Trajectory",          v:trajectoryLabel, c:trajectoryColor},
                               {l:"Prediction Interval", v:lo80&&hi80?(lo80+"–"+hi80+"%"):"Not available", c:C.mutedHigh},
                               {l:"Signal Status",       v:outsidePI?"Outside PI":"Within PI", c:outsidePI?C.red:C.green},
@@ -1379,7 +1435,7 @@ function AlertInvestigation({ alert: init }) {
                           <div style={{display:"flex",flexDirection:"column",gap:5}}>
                             {[
                               "Surveillance data: WHO GLASS / ECDC EARS-Net",
-                              "Forecast deviation: +" + devPp + "pp above model expectation",
+                              "Forecast deviation: +" + devPp + "pp above forecast",
                               outsidePI ? "Statistical significance: Outside 80% prediction interval" : null,
                               cits.length > 0 ? "Literature support: " + cits.length + " peer-reviewed studies" : null,
                               "Signal trajectory: " + trajectoryLabel,
@@ -1452,11 +1508,11 @@ function AlertInvestigation({ alert: init }) {
                           <Tooltip contentStyle={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6}}
                             formatter={(v,n)=>{
                               if(n==="resistance_rate") return [(v*100).toFixed(1)+"%","Observed"];
-                              if(n==="forecast") return [(v*100).toFixed(1)+"%","Model Expectation"];
+                              if(n==="forecast") return [(v*100).toFixed(1)+"%","Forecast Resistance"];
                               return [v,n];
                             }} labelStyle={{color:C.white,fontFamily:"JetBrains Mono,monospace"}}/>
                           <ReferenceLine y={.5} stroke={C.red} strokeDasharray="4 4" label={{value:"Alert threshold",fill:C.red,fontSize:9,position:"insideTopRight"}}/>
-                          {alert.forecasted_rate && <ReferenceLine y={alert.forecasted_rate} stroke={C.mutedHigh} strokeDasharray="3 3" label={{value:"Model expectation",fill:C.mutedHigh,fontSize:9,position:"insideTopRight"}}/>}
+                          {alert.forecasted_rate && <ReferenceLine y={alert.forecasted_rate} stroke={C.mutedHigh} strokeDasharray="3 3" label={{value:"Forecast resistance",fill:C.mutedHigh,fontSize:9,position:"insideTopRight"}}/>}
                           <Area type="monotone" dataKey="resistance_rate" stroke={C.accent} fill="url(#g1)" strokeWidth={2.5} dot={{fill:C.accent,r:4}} name="resistance_rate"/>
                         </AreaChart>
                       </ResponsiveContainer>
@@ -1466,8 +1522,8 @@ function AlertInvestigation({ alert: init }) {
                       <div style={{marginTop:14,background:C.surfaceHigh,borderRadius:6,padding:"10px 14px",display:"flex",gap:24,flexWrap:"wrap"}}>
                         <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Data Points</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.white}}>{trendPts.length} years</div></div>
                         <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Latest Observed</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.red}}>{obsRate}%</div></div>
-                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Model Expectation</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.mutedHigh}}>{expRate}%</div></div>
-                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Difference</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.red}}>+{devPp}pp above expectation</div></div>
+                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Forecast Resistance</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.mutedHigh}}>{expRate}%</div></div>
+                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Above Forecast</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.red}}>+{devPp}pp</div></div>
                       </div>
                     )}
                   </div>
@@ -1539,8 +1595,8 @@ function AlertInvestigation({ alert: init }) {
                   ]
                 : [
                     {label:"Observed",         value:obsRate+"%",                   color:(alert.current_resistance||0)>=.5?C.red:C.amber},
-                    {label:"Model Expectation",value:expRate+"%",                   color:C.mutedHigh},
-                    {label:"Difference",       value:"+"+devPp+"pp",               color:C.red},
+                    {label:"Forecast Resistance",value:expRate+"%",                 color:C.mutedHigh},
+                    {label:"Above Forecast",   value:"+"+devPp+"pp",               color:C.red},
                     {label:"Trajectory",       value:trajectoryLabel,               color:trajectoryColor},
                     {label:"Signal Since",     value:alert.created_at?new Date(alert.created_at).toLocaleDateString("en-GB",{month:"short",year:"numeric"}):"—", color:C.white},
                     {label:"Signal Score",     value:alert.severity_score+"/100",  color:accentColor},
