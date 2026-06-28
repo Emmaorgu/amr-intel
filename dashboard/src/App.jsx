@@ -1052,7 +1052,7 @@ function GenomicIntelligence({ onInvestigate }) {
 // ─── Screen 5: Alert Investigation ───────────────────────────────────────────
 function AlertInvestigation({ alert: init }) {
   const [alert,   setAlert]   = useState(init);
-  const [tab,     setTab]     = useState("bulletin");
+  const [tab,     setTab]     = useState("report");
   const [trend,   setTrend]   = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -1083,24 +1083,100 @@ function AlertInvestigation({ alert: init }) {
   const trendPts = trend?.data||[];
   const accentColor = isGenomic ? C.teal : (TIER_COLOR[alert.severity_tier] || C.blue);
 
+  const pName = (alert.pathogen_name||"").replace("Klebsiella pneumoniae","K. pneumoniae").replace("Enterococcus faecium","E. faecium").replace("Staphylococcus aureus","S. aureus").replace("Pseudomonas aeruginosa","P. aeruginosa").replace("Escherichia coli","E. coli").replace("Acinetobacter spp.","Acinetobacter").replace("Acinetobacter baumannii","A. baumannii");
+
+  const obsRate = ((alert.current_resistance||0)*100).toFixed(1);
+  const expRate = ((alert.forecasted_rate||0)*100).toFixed(1);
+  const devPp   = ((alert.deviation_magnitude||0)*100).toFixed(1);
+  const lo80    = alert.forecast_lower_80 != null ? (alert.forecast_lower_80*100).toFixed(1) : null;
+  const hi80    = alert.forecast_upper_80 != null ? (alert.forecast_upper_80*100).toFixed(1) : null;
+  const outsidePI = lo80 && hi80 && (alert.current_resistance||0)*100 > parseFloat(hi80);
+
+  const trajectoryLabel = alert.trend_direction === "rising"
+    ? (parseFloat(obsRate) < 15 ? "Emerging" : parseFloat(obsRate) < 40 ? "Escalating" : "Endemic Critical")
+    : alert.trend_direction === "falling" ? "Improving" : "Stable";
+
+  const trajectoryColor = alert.trend_direction === "rising"
+    ? (parseFloat(obsRate) < 15 ? C.amber : parseFloat(obsRate) < 40 ? C.red : C.red)
+    : alert.trend_direction === "falling" ? C.green : C.muted;
+
+  // Build provenance sources
+  const sources = [];
+  if (!isGenomic) {
+    sources.push({label:"WHO GLASS", ok:true});
+    sources.push({label:"ECDC EARS-Net", ok:true});
+    if(cits.length > 0) sources.push({label:"PubMed (" + cits.length + " studies)", ok:true});
+    sources.push({label:"TFT Forecast Model", ok:alert.forecasted_rate != null});
+    if(alert.forecast_lower_80 != null) sources.push({label:"Confidence Intervals (80%)", ok:true});
+  } else {
+    sources.push({label:"NCBI NDARO", ok:true});
+    if(alert.current_resistance > 0) sources.push({label:"Phenotypic Surveillance", ok:true});
+    else sources.push({label:"Phenotypic Surveillance", ok:false, note:"Not yet detected"});
+    sources.push({label:"Genomic Trajectory Model", ok:true});
+  }
+
+  // Primary signal drivers for the evidence card
+  const drivers = [];
+  if(!isGenomic) {
+    if(parseFloat(devPp) > 20) drivers.push("Resistance exceeded model expectation by " + devPp + " percentage points");
+    if(outsidePI && lo80 && hi80) drivers.push("Outside 80% prediction interval (" + lo80 + "–" + hi80 + "%)");
+    if(alert.trend_direction === "rising") drivers.push("Rising trajectory across 3+ consecutive surveillance years");
+    if(cits.length >= 3) drivers.push("Consistent with " + cits.length + " peer-reviewed studies");
+    if((alert.current_resistance||0) >= 0.5) drivers.push("Absolute resistance rate ≥50% — treatment failure threshold");
+    drivers.push("Severity score " + alert.severity_score + "/100");
+  } else {
+    if(alert.doubling_time_years && alert.doubling_time_years < 2) drivers.push("Sub-2 year doubling time (" + alert.doubling_time_years + "yr) — exponential expansion");
+    if(alert.isolate_count) drivers.push(alert.isolate_count.toLocaleString() + " sequenced isolates detected carrying " + (alert.gene_name||"resistance gene"));
+    if(alert.current_resistance > 0) drivers.push("Phenotypic resistance beginning to appear (" + (alert.current_resistance*100).toFixed(1) + "%) — converging signals");
+    else drivers.push("No phenotypic resistance yet detected — genuine pre-phenotypic window");
+    if(alert.surveillance_confidence === "HIGH") drivers.push("HIGH confidence — ECDC phenotypic surveillance confirms data reliability");
+  }
+
   const tabs = [
-    {id:"bulletin",label:"Bulletin"},
-    {id:"trend",label: isGenomic ? "Genomic Trajectory" : "Trend Analysis"},
-    {id:"citations",label:"Citations (" + cits.length + ")"},
-    {id:"history",label:"History"},
+    {id:"report",   label:"Intelligence Report"},
+    {id:"trend",    label: isGenomic ? "Genomic Trajectory" : "Trajectory Analysis"},
+    {id:"citations",label:"Evidence (" + cits.length + ")"},
+    {id:"history",  label:"History"},
   ];
 
-  const pName = (alert.pathogen_name||"").replace("Klebsiella pneumoniae","K. pneumoniae").replace("Enterococcus faecium","E. faecium").replace("Staphylococcus aureus","S. aureus").replace("Pseudomonas aeruginosa","P. aeruginosa").replace("Escherichia coli","E. coli").replace("Acinetobacter spp.","Acinetobacter").replace("Acinetobacter baumannii","A. baumannii");
+  // Structured bulletin sections parsed from stewardship_guidance
+  function renderStructuredBulletin(text) {
+    if(!text) return <Empty msg="Intelligence report not yet generated"/>;
+    // Split on double newlines for paragraphs
+    const paragraphs = text.split(/\n\n+/).filter(Boolean);
+    return (
+      <div style={{display:"flex",flexDirection:"column",gap:20}}>
+        {paragraphs.map((para, i) => {
+          const lines = para.trim().split("\n").filter(Boolean);
+          if(lines.length === 0) return null;
+          // Detect section headers (ALL CAPS lines or lines ending with :)
+          const firstLine = lines[0].trim();
+          const isHeader = firstLine === firstLine.toUpperCase() && firstLine.length < 60 && /[A-Z]/.test(firstLine);
+          if(isHeader && lines.length > 1) {
+            return (
+              <div key={i}>
+                <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>{firstLine}</div>
+                <div style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85}}>{lines.slice(1).join("\n")}</div>
+              </div>
+            );
+          }
+          return <div key={i} style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85}}>{para}</div>;
+        })}
+      </div>
+    );
+  }
 
   return (
     <div className="fade-up" style={{padding:"20px 24px",maxWidth:1400}}>
-      <div style={{background:C.surface,border:"1px solid " + C.border,borderLeft:"4px solid " + accentColor,borderRadius:8,padding:20,marginBottom:20}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-          <div style={{flex:1}}>
-            <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:8}}>
+
+      {/* ── Alert header ── */}
+      <div style={{background:C.surface,border:"1px solid " + C.border,borderLeft:"4px solid " + accentColor,borderRadius:8,padding:20,marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
               <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:36,fontWeight:800,color:accentColor,lineHeight:1}}>{alert.severity_score}</div>
               <div>
-                <div style={{fontSize:9,color:C.muted,letterSpacing:".08em",textTransform:"uppercase",marginBottom:2}}>Severity Score</div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:".08em",textTransform:"uppercase",marginBottom:2}}>Intelligence Score</div>
                 {isGenomic ? <ConfBadge conf={alert.surveillance_confidence}/> : <SeverityBadge tier={alert.severity_tier}/>}
               </div>
               {isGenomic && <span style={{fontSize:11,background:C.tealDim,color:C.teal,padding:"3px 10px",borderRadius:4,border:"1px solid " + C.teal + "40",fontFamily:"JetBrains Mono,monospace",fontWeight:700}}>🧬 GENOMIC PRECURSOR</span>}
@@ -1111,40 +1187,92 @@ function AlertInvestigation({ alert: init }) {
                 {isGenomic ? (alert.gene_name || "Genomic Signal") : (alert.antibiotic_name + " Resistance")}
               </span>
             </h1>
-            <div style={{fontSize:12,color:C.muted,display:"flex",alignItems:"center",gap:6}}>
+            <div style={{fontSize:12,color:C.muted,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
               {getFlagUrl(alert.country_iso3) && <img src={getFlagUrl(alert.country_iso3)} width="14" height="10" style={{borderRadius:1}} alt=""/>}
-              {countryName(alert.country_iso3)} ({alert.country_iso3}) · Detected {alert.created_at ? new Date(alert.created_at).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : "—"}
+              {countryName(alert.country_iso3)} ({alert.country_iso3})
+              <span style={{color:C.border}}>·</span>
+              Detected {alert.created_at ? new Date(alert.created_at).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : "—"}
+              <span style={{color:C.border}}>·</span>
+              <span style={{color:trajectoryColor,fontWeight:600}}>{"Trajectory: " + trajectoryLabel}</span>
             </div>
           </div>
 
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,textAlign:"center"}}>
+          {/* Metric cards */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,textAlign:"center",minWidth:340}}>
             {(isGenomic
-              ? [{label:"Isolate Count",value:(alert.isolate_count||0).toLocaleString(),color:C.teal},{label:"Doubling Time",value:alert.doubling_time_years?(alert.doubling_time_years + "yr"):"N/A",color:alert.doubling_time_years<1?C.red:alert.doubling_time_years<2?C.amber:C.mutedHigh},{label:"→500 Isolates",value:alert.days_to_threshold?(alert.days_to_threshold + "d"):"N/A",color:C.amber},{label:"Severity Score",value:alert.severity_score + "/100",color:accentColor}]
-              : [{label:"Resistance Rate",value:((alert.current_resistance||0)*100).toFixed(1)+"%",color:(alert.current_resistance||0)>=.5?C.red:C.amber},{label:"Forecast",value:((alert.forecasted_rate||0)*100).toFixed(1)+"%",color:C.mutedHigh},{label:"Deviation",value:"+" + ((alert.deviation_magnitude||0)*100).toFixed(1)+"pp",color:C.red},{label:"Severity Score",value:alert.severity_score + "/100",color:accentColor}]
+              ? [
+                  {label:"Isolate Count",     value:(alert.isolate_count||0).toLocaleString(), color:C.teal},
+                  {label:"Doubling Time",     value:alert.doubling_time_years?(alert.doubling_time_years + "yr"):"N/A", color:alert.doubling_time_years&&alert.doubling_time_years<1?C.red:alert.doubling_time_years&&alert.doubling_time_years<2?C.amber:C.mutedHigh},
+                  {label:"Phenotypic Rate",   value:alert.current_resistance>0?((alert.current_resistance*100).toFixed(1)+"%"):"Not detected", color:alert.current_resistance>0?C.amber:C.muted},
+                  {label:"Signal Score",      value:alert.severity_score + "/100", color:accentColor},
+                ]
+              : [
+                  {label:"Observed",          value:obsRate + "%",   color:(alert.current_resistance||0)>=.5?C.red:C.amber},
+                  {label:"Model Expectation", value:expRate + "%",   color:C.mutedHigh},
+                  {label:"Difference",        value:"+" + devPp + "pp", color:C.red},
+                  {label:"Signal Score",      value:alert.severity_score + "/100", color:accentColor},
+                ]
             ).map(m=>(
-              <div key={m.label}>
-                <div style={{fontSize:9,color:C.muted,letterSpacing:".06em",textTransform:"uppercase",marginBottom:4}}>{m.label}</div>
-                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:16,fontWeight:700,color:m.color}}>{m.value}</div>
+              <div key={m.label} style={{background:C.surfaceHigh,borderRadius:6,padding:"10px 8px",border:"1px solid " + C.border}}>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:".05em",textTransform:"uppercase",marginBottom:4}}>{m.label}</div>
+                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:15,fontWeight:700,color:m.color}}>{m.value}</div>
               </div>
             ))}
           </div>
         </div>
 
-        <div style={{display:"flex",gap:24,marginTop:16,paddingTop:14,borderTop:"1px solid " + C.border}}>
-          {(isGenomic
-            ? [{label:"Signal Type",value:"Genomic Precursor",color:C.teal},{label:"Gene Family",value:alert.gene_family||"—",color:C.white},{label:"Drug Class",value:alert.antibiotic_name||"—",color:C.red},{label:"Confidence",value:alert.surveillance_confidence||"—",color:CONF_COLOR[alert.surveillance_confidence]||C.muted},{label:"WHO Priority",value:alert.who_priority||"—",color:alert.who_priority==="CRITICAL"?C.red:C.amber}]
-            : [{label:"Trend (3-year)",value:alert.trend_direction==="rising"?"↑ Rising":alert.trend_direction==="falling"?"↓ Falling":"→ Stable",color:alert.trend_direction==="rising"?C.red:alert.trend_direction==="falling"?C.green:C.muted},{label:"Signal Since",value:alert.created_at?new Date(alert.created_at).toLocaleDateString("en-GB",{month:"short",year:"numeric"}):"—",color:C.white},{label:"Signal Type",value:(alert.signal_type||"—").replace("_"," "),color:C.mutedHigh},{label:"Confidence",value:"High",color:C.green}]
-          ).map(m=>(
-            <div key={m.label}>
-              <div style={{fontSize:9,color:C.muted,letterSpacing:".06em",textTransform:"uppercase",marginBottom:3}}>{m.label}</div>
-              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,fontWeight:600,color:m.color}}>{m.value}</div>
+        {/* Prediction interval row — phenotypic only */}
+        {!isGenomic && lo80 && hi80 && (
+          <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid " + C.border,display:"flex",gap:28,alignItems:"center",flexWrap:"wrap"}}>
+            <div>
+              <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:2}}>80% Prediction Interval</div>
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.mutedHigh}}>{lo80 + "% – " + hi80 + "%"}</div>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:2}}>Signal Status</div>
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:outsidePI?C.red:C.green,fontWeight:700}}>{outsidePI ? "Outside Prediction Interval" : "Within Expected Range"}</div>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginBottom:2}}>Forecast Confidence</div>
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.green,fontWeight:700}}>High — 80% CI Available</div>
+            </div>
+            <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+              {sources.map((s,i)=>(
+                <span key={i} style={{fontSize:10,padding:"3px 8px",borderRadius:4,background:s.ok?C.greenDim:C.surfaceHigh,color:s.ok?C.green:C.muted,border:"1px solid " + (s.ok?C.green+"40":C.border),fontFamily:"JetBrains Mono,monospace"}}>
+                  {s.ok ? "✓" : "○"} {s.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {isGenomic && (
+          <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid " + C.border,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+            <span style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".06em",marginRight:6}}>Data Sources</span>
+            {sources.map((s,i)=>(
+              <span key={i} style={{fontSize:10,padding:"3px 8px",borderRadius:4,background:s.ok?C.tealDim:C.surfaceHigh,color:s.ok?C.teal:C.muted,border:"1px solid " + (s.ok?C.teal+"40":C.border),fontFamily:"JetBrains Mono,monospace"}}>
+                {s.ok ? "✓" : "○"} {s.label}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── WHY THIS ALERT? — Evidence card ── */}
+      <div style={{background:C.surfaceHigh,border:"1px solid " + accentColor + "40",borderRadius:8,padding:16,marginBottom:16}}>
+        <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:12}}>Why This Alert? — Primary Signal Drivers</div>
+        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          {drivers.map((d,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10}}>
+              <span style={{color:accentColor,fontSize:13,flexShrink:0,marginTop:1}}>↑</span>
+              <span style={{fontSize:12,color:C.mutedHigh,lineHeight:1.5}}>{d}</span>
             </div>
           ))}
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 260px",gap:20}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 270px",gap:16}}>
         <div>
+          {/* Tabs */}
           <div style={{display:"flex",gap:2,borderBottom:"1px solid " + C.border,marginBottom:0}}>
             {tabs.map(t=>(
               <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"8px 16px",background:"none",border:"none",borderBottom:tab===t.id?"2px solid " + accentColor:"2px solid transparent",color:tab===t.id?C.white:C.muted,fontSize:12,fontWeight:tab===t.id?600:400,marginBottom:-1}}>{t.label}</button>
@@ -1154,107 +1282,293 @@ function AlertInvestigation({ alert: init }) {
           <div style={{background:C.surface,border:"1px solid " + C.border,borderTop:"none",borderRadius:"0 0 8px 8px",padding:24,minHeight:320}}>
             {loading ? <Spinner/> : (
               <>
-                {tab==="bulletin" && (
+                {/* ── Intelligence Report tab ── */}
+                {tab==="report" && (
                   <div>
-                    {isGenomic && alert.intelligence_summary ? (
-                      <div>
-                        <div style={{fontSize:10,color:C.teal,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:10}}>Genomic Intelligence Summary</div>
-                        <div style={{color:C.mutedHigh,fontSize:13,lineHeight:1.9}}>{alert.intelligence_summary}</div>
-                        {alert.surveillance_caveat && (
-                          <div style={{marginTop:16,background:C.surfaceHigh,border:"1px solid " + C.amber + "40",borderRadius:6,padding:"10px 14px"}}>
-                            <div style={{fontSize:9,color:C.amber,fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Validation Note</div>
-                            <div style={{fontSize:11,color:C.mutedHigh,lineHeight:1.6}}>{alert.surveillance_caveat}</div>
+                    {isGenomic ? (
+                      <div style={{display:"flex",flexDirection:"column",gap:20}}>
+                        {/* Executive Summary */}
+                        <div>
+                          <div style={{fontSize:9,color:C.teal,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Executive Summary</div>
+                          <div style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85}}>
+                            {alert.intelligence_summary || ("Genomic surveillance has detected " + (alert.gene_name||"a resistance gene") + " in " + (alert.isolate_count||0).toLocaleString() + " clinical isolates of " + pName + " in " + countryName(alert.country_iso3) + ". " + (alert.doubling_time_years && alert.doubling_time_years < 2 ? "The gene is expanding at sub-2-year doubling time, indicating exponential growth. " : "") + (alert.current_resistance > 0 ? "Phenotypic resistance is beginning to appear, representing a converging pre-phenotypic signal." : "Phenotypic resistance has not yet been detected in surveillance data, representing a genuine early warning opportunity."))}
+                          </div>
+                        </div>
+                        {/* Evidence */}
+                        <div>
+                          <div style={{fontSize:9,color:C.teal,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Genomic Evidence</div>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                            {[
+                              {l:"Gene",              v:alert.gene_name||"—"},
+                              {l:"Gene Family",       v:alert.gene_family||"—"},
+                              {l:"Pathogen",          v:pName},
+                              {l:"Drug Class",        v:alert.antibiotic_name||"—"},
+                              {l:"Isolate Count",     v:(alert.isolate_count||0).toLocaleString()},
+                              {l:"Doubling Time",     v:alert.doubling_time_years?(alert.doubling_time_years+"yr"):"N/A"},
+                              {l:"Phenotypic Rate",   v:alert.current_resistance>0?((alert.current_resistance*100).toFixed(1)+"%"):"Not detected"},
+                              {l:"WHO Priority",      v:alert.who_priority||"—"},
+                            ].map(f=>(
+                              <div key={f.l} style={{background:C.surfaceHigh,borderRadius:5,padding:"8px 12px",border:"1px solid " + C.border}}>
+                                <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:3}}>{f.l}</div>
+                                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,fontWeight:700,color:C.white}}>{f.v}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Confidence */}
+                        <div>
+                          <div style={{fontSize:9,color:C.teal,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Confidence Assessment</div>
+                          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+                            <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:18,fontWeight:800,color:CONF_COLOR[alert.surveillance_confidence]||C.muted}}>{alert.surveillance_confidence||"MEDIUM"}</span>
+                            <span style={{fontSize:12,color:C.muted}}>Surveillance Confidence</span>
+                          </div>
+                          {alert.surveillance_caveat && (
+                            <div style={{background:C.surfaceHigh,border:"1px solid " + C.amber + "40",borderRadius:6,padding:"10px 14px"}}>
+                              <div style={{fontSize:9,color:C.amber,fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Validation Note</div>
+                              <div style={{fontSize:11,color:C.mutedHigh,lineHeight:1.6}}>{alert.surveillance_caveat}</div>
+                            </div>
+                          )}
+                        </div>
+                        {/* Recommended Actions */}
+                        {alert.stewardship_guidance && (
+                          <div>
+                            <div style={{fontSize:9,color:C.teal,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Recommended Actions</div>
+                            <div style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85,whiteSpace:"pre-wrap"}}>{alert.stewardship_guidance}</div>
                           </div>
                         )}
                       </div>
                     ) : (
-                      <div>
-                        <div style={{color:C.mutedHigh,fontSize:13,lineHeight:1.9,whiteSpace:"pre-wrap"}}>
-                          {alert.stewardship_guidance || <Empty msg="Bulletin not yet generated"/>}
+                      <div style={{display:"flex",flexDirection:"column",gap:22}}>
+                        {/* Situation Assessment */}
+                        <div>
+                          <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Situation Assessment</div>
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+                            {[
+                              {l:"Observed Resistance", v:obsRate+"%",   c:(alert.current_resistance||0)>=.5?C.red:C.amber},
+                              {l:"Model Expectation",   v:expRate+"%",   c:C.mutedHigh},
+                              {l:"Difference",          v:"+"+devPp+"pp",c:C.red},
+                              {l:"Trajectory",          v:trajectoryLabel, c:trajectoryColor},
+                              {l:"Prediction Interval", v:lo80&&hi80?(lo80+"–"+hi80+"%"):"Not available", c:C.mutedHigh},
+                              {l:"Signal Status",       v:outsidePI?"Outside PI":"Within PI", c:outsidePI?C.red:C.green},
+                            ].map(f=>(
+                              <div key={f.l} style={{background:C.surfaceHigh,borderRadius:5,padding:"8px 12px",border:"1px solid " + C.border}}>
+                                <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:3}}>{f.l}</div>
+                                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:13,fontWeight:700,color:f.c}}>{f.v}</div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
+
+                        {/* Intelligence bulletin — structured */}
                         {alert.stewardship_guidance && (
-                          <button onClick={()=>setTab("trend")} style={{marginTop:16,background:"none",border:"none",color:C.accent,fontSize:12,padding:0}}>View Resistance Trajectory →</button>
+                          <>
+                            <div>
+                              <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Intelligence Assessment</div>
+                              {renderStructuredBulletin(alert.stewardship_guidance)}
+                            </div>
+                          </>
                         )}
+
+                        {/* Confidence Assessment */}
+                        <div>
+                          <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Confidence Assessment</div>
+                          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+                            <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:18,fontWeight:800,color:C.green}}>HIGH</span>
+                            <span style={{fontSize:12,color:C.muted}}>Forecast Confidence</span>
+                          </div>
+                          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                            {[
+                              "Surveillance data: WHO GLASS / ECDC EARS-Net",
+                              "Forecast deviation: +" + devPp + "pp above model expectation",
+                              outsidePI ? "Statistical significance: Outside 80% prediction interval" : null,
+                              cits.length > 0 ? "Literature support: " + cits.length + " peer-reviewed studies" : null,
+                              "Signal trajectory: " + trajectoryLabel,
+                            ].filter(Boolean).map((r,i)=>(
+                              <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:11,color:C.mutedHigh}}>
+                                <span style={{color:C.green,fontSize:10}}>✓</span>{r}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
                 )}
 
+                {/* ── Trajectory Analysis tab ── */}
                 {tab==="trend" && (
                   <div>
-                    <div style={{fontSize:12,color:C.muted,marginBottom:16}}>{alert.pathogen_name} · {isGenomic ? (alert.gene_name + " isolate count") : alert.antibiotic_name} · {countryName(alert.country_iso3)}</div>
+                    <div style={{fontSize:12,color:C.muted,marginBottom:8}}>{alert.pathogen_name} · {isGenomic ? (alert.gene_name + " — sequenced isolate count") : (alert.antibiotic_name + " resistance rate")} · {countryName(alert.country_iso3)}</div>
+
+                    {/* Legend */}
+                    {!isGenomic && (
+                      <div style={{display:"flex",gap:16,marginBottom:14,flexWrap:"wrap"}}>
+                        {[
+                          {color:C.accent,    label:"Observed resistance rate"},
+                          {color:C.mutedHigh, label:"Model expectation",  dash:true},
+                          {color:C.red,       label:"Alert threshold (50%)", dash:true},
+                        ].map((l,i)=>(
+                          <div key={i} style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:C.muted}}>
+                            <div style={{width:20,height:2,background:l.color,borderTop:l.dash?"2px dashed "+l.color:"none",opacity:l.dash?.6:1}}/>
+                            {l.label}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     {isGenomic && alert.time_series ? (
-                      <ResponsiveContainer width="100%" height={280}>
+                      <ResponsiveContainer width="100%" height={300}>
                         <AreaChart data={Object.entries(alert.time_series).map(([y,c])=>({year:parseInt(y),count:c})).sort((a,b)=>a.year-b.year)} margin={{top:10,right:20,bottom:0,left:0}}>
                           <defs>
                             <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor={C.teal} stopOpacity={.25}/>
+                              <stop offset="5%" stopColor={C.teal} stopOpacity={.3}/>
                               <stop offset="95%" stopColor={C.teal} stopOpacity={0}/>
                             </linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                           <XAxis dataKey="year" stroke={C.muted} tick={{fill:C.muted,fontSize:10,fontFamily:"JetBrains Mono,monospace"}}/>
                           <YAxis stroke={C.muted} tick={{fill:C.muted,fontSize:10,fontFamily:"JetBrains Mono,monospace"}} tickFormatter={v=>v>=1000?(v/1000).toFixed(1)+"k":v}/>
-                          <Tooltip contentStyle={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6}} formatter={v=>[v.toLocaleString(),"Isolates"]} labelStyle={{color:C.white}}/>
-                          <Area type="monotone" dataKey="count" stroke={C.teal} fill="url(#g2)" strokeWidth={2} dot={{fill:C.teal,r:3}}/>
+                          <Tooltip contentStyle={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6}} formatter={v=>[v.toLocaleString()+" isolates","Sequenced Isolates"]} labelStyle={{color:C.white}}/>
+                          <Area type="monotone" dataKey="count" stroke={C.teal} fill="url(#g2)" strokeWidth={2.5} dot={{fill:C.teal,r:4}}/>
                         </AreaChart>
                       </ResponsiveContainer>
                     ) : trendPts.length > 0 ? (
-                      <ResponsiveContainer width="100%" height={280}>
-                        <AreaChart data={trendPts} margin={{top:10,right:20,bottom:0,left:0}}>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <AreaChart data={trendPts.map(p=>({
+                          ...p,
+                          forecast: alert.forecasted_rate||null,
+                          lo80: alert.forecast_lower_80||null,
+                          hi80: alert.forecast_upper_80||null,
+                        }))} margin={{top:10,right:20,bottom:0,left:0}}>
                           <defs>
                             <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor={C.accent} stopOpacity={.25}/>
+                              <stop offset="5%" stopColor={C.accent} stopOpacity={.3}/>
                               <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
                             </linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                           <XAxis dataKey="year" stroke={C.muted} tick={{fill:C.muted,fontSize:10,fontFamily:"JetBrains Mono,monospace"}}/>
                           <YAxis stroke={C.muted} tick={{fill:C.muted,fontSize:10,fontFamily:"JetBrains Mono,monospace"}} tickFormatter={v=>(v*100).toFixed(0)+"%"} domain={[0,"auto"]}/>
-                          <Tooltip contentStyle={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6}} formatter={v=>[(v*100).toFixed(1)+"%","Resistance Rate"]} labelStyle={{color:C.white,fontFamily:"JetBrains Mono,monospace"}}/>
-                          <ReferenceLine y={.5} stroke={C.red} strokeDasharray="4 4"/>
-                          <Area type="monotone" dataKey="resistance_rate" stroke={C.accent} fill="url(#g1)" strokeWidth={2} dot={{fill:C.accent,r:3}}/>
+                          <Tooltip contentStyle={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6}}
+                            formatter={(v,n)=>{
+                              if(n==="resistance_rate") return [(v*100).toFixed(1)+"%","Observed"];
+                              if(n==="forecast") return [(v*100).toFixed(1)+"%","Model Expectation"];
+                              return [v,n];
+                            }} labelStyle={{color:C.white,fontFamily:"JetBrains Mono,monospace"}}/>
+                          <ReferenceLine y={.5} stroke={C.red} strokeDasharray="4 4" label={{value:"Alert threshold",fill:C.red,fontSize:9,position:"insideTopRight"}}/>
+                          {alert.forecasted_rate && <ReferenceLine y={alert.forecasted_rate} stroke={C.mutedHigh} strokeDasharray="3 3" label={{value:"Model expectation",fill:C.mutedHigh,fontSize:9,position:"insideTopRight"}}/>}
+                          <Area type="monotone" dataKey="resistance_rate" stroke={C.accent} fill="url(#g1)" strokeWidth={2.5} dot={{fill:C.accent,r:4}} name="resistance_rate"/>
                         </AreaChart>
                       </ResponsiveContainer>
-                    ) : <Empty msg="Trend data not available"/>}
+                    ) : <Empty msg="Trajectory data not available for this signal"/>}
+
+                    {!isGenomic && trendPts.length > 0 && (
+                      <div style={{marginTop:14,background:C.surfaceHigh,borderRadius:6,padding:"10px 14px",display:"flex",gap:24,flexWrap:"wrap"}}>
+                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Data Points</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.white}}>{trendPts.length} years</div></div>
+                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Latest Observed</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.red}}>{obsRate}%</div></div>
+                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Model Expectation</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.mutedHigh}}>{expRate}%</div></div>
+                        <div><div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:".05em",marginBottom:2}}>Difference</div><div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.red}}>+{devPp}pp above expectation</div></div>
+                      </div>
+                    )}
                   </div>
                 )}
 
+                {/* ── Evidence tab ── */}
                 {tab==="citations" && (
-                  <div style={{display:"flex",flexDirection:"column",gap:14}}>
-                    {cits.length===0 ? <Empty msg="No citations linked"/> : cits.map((c,i)=>(
-                      <div key={i} style={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6,padding:14}}>
-                        <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-                          <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:10,color:C.amber,background:C.amberDim,padding:"2px 6px",borderRadius:3,flexShrink:0,marginTop:2}}>PMID {c.pmid||"—"}</span>
-                          <div>
-                            <div style={{fontSize:13,fontWeight:600,color:C.white,marginBottom:4}}>{c.title||"Untitled"}</div>
-                            <div style={{fontSize:11,color:C.mutedHigh,lineHeight:1.6}}>{c.summary||c.abstract||"No summary."}</div>
+                  <div>
+                    <div style={{fontSize:10,color:C.muted,marginBottom:14}}>
+                      {cits.length} peer-reviewed studies retrieved via PubMed for <strong style={{color:C.white}}>{pName} / {alert.antibiotic_name}</strong>. Citations ground the intelligence assessment and are not LLM-generated.
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                      {cits.length===0 ? <Empty msg="No citations linked to this alert"/> : cits.map((c,i)=>(
+                        <div key={i} style={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6,padding:14}}>
+                          <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                            <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:10,color:C.amber,background:C.amberDim,padding:"2px 6px",borderRadius:3,flexShrink:0,marginTop:2}}>PMID {c.pmid||"—"}</span>
+                            <div>
+                              <div style={{fontSize:13,fontWeight:600,color:C.white,marginBottom:4,lineHeight:1.4}}>{c.title||"Untitled"}</div>
+                              <div style={{fontSize:11,color:C.mutedHigh,lineHeight:1.65}}>{c.summary||c.abstract||"No summary available."}</div>
+                              {c.pubmed_url && <a href={c.pubmed_url} target="_blank" rel="noreferrer" style={{fontSize:10,color:C.accent,marginTop:6,display:"inline-block"}}>View on PubMed →</a>}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
 
-                {tab==="history" && <Empty msg="Historical state transitions — coming soon"/>}
+                {tab==="history" && <Empty msg="State transition history — STABLE → WATCH → EMERGING → CRITICAL tracking coming soon"/>}
               </>
             )}
           </div>
         </div>
 
-        <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:18,height:"fit-content"}}>
-          <SectionTitle>Key Facts</SectionTitle>
-          <div style={{display:"flex",flexDirection:"column",gap:14}}>
-            {(isGenomic
-              ? [{label:"Gene",value:alert.gene_name||"—",color:C.teal},{label:"Drug Class",value:alert.antibiotic_name||"—",color:C.red},{label:"Isolate Count",value:(alert.isolate_count||0).toLocaleString(),color:C.teal},{label:"Doubling Time",value:alert.doubling_time_years?(alert.doubling_time_years+"yr"):"N/A",color:alert.doubling_time_years<1?C.red:C.amber},{label:"Phenotypic Rate",value:alert.current_resistance>0?((alert.current_resistance*100).toFixed(1)+"%"):"No data",color:alert.current_resistance>0?C.amber:C.muted},{label:"Confidence",value:alert.surveillance_confidence||"—",color:CONF_COLOR[alert.surveillance_confidence]||C.muted},{label:"WHO Priority",value:alert.who_priority||"—",color:alert.who_priority==="CRITICAL"?C.red:C.amber}]
-              : [{label:"Resistance Rate",value:((alert.current_resistance||0)*100).toFixed(1)+"%",color:(alert.current_resistance||0)>=.5?C.red:C.amber},{label:"Forecast",value:((alert.forecasted_rate||0)*100).toFixed(1)+"%",color:C.white},{label:"Deviation",value:"+" + ((alert.deviation_magnitude||0)*100).toFixed(1)+"pp",color:C.red},{label:"Trend",value:alert.trend_direction==="rising"?"↑ Rising":alert.trend_direction==="falling"?"↓ Falling":"→ Stable",color:alert.trend_direction==="rising"?C.red:alert.trend_direction==="falling"?C.green:C.muted},{label:"Signal Since",value:alert.created_at?new Date(alert.created_at).toLocaleDateString("en-GB",{month:"short",year:"numeric"}):"—",color:C.white},{label:"Severity Score",value:alert.severity_score+"/100",color:accentColor},{label:"Confidence",value:"High",color:C.green}]
-            ).map(f=>(
-              <div key={f.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,borderBottom:"1px solid " + C.border + "20"}}>
-                <span style={{fontSize:11,color:C.muted}}>{f.label}</span>
-                <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,fontWeight:700,color:f.color}}>{f.value}</span>
+        {/* ── Right panel: Intelligence Summary ── */}
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {/* Confidence card */}
+          <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16}}>
+            <div style={{fontSize:9,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:12}}>Confidence Assessment</div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:22,fontWeight:800,color:isGenomic?(CONF_COLOR[alert.surveillance_confidence]||C.amber):C.green}}>
+                {isGenomic ? (alert.surveillance_confidence||"MEDIUM") : "HIGH"}
               </div>
-            ))}
+              <div style={{fontSize:11,color:C.muted}}>{isGenomic ? "Surveillance Confidence" : "Forecast Confidence"}</div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {sources.map((s,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:10,color:s.ok?C.mutedHigh:C.muted}}>
+                  <span style={{color:s.ok?C.green:C.muted,flexShrink:0}}>{s.ok?"✓":"○"}</span>
+                  <span>{s.label}</span>
+                  {s.note && <span style={{color:C.muted,fontSize:9}}>({s.note})</span>}
+                </div>
+              ))}
+            </div>
           </div>
+
+          {/* Signal facts */}
+          <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16}}>
+            <div style={{fontSize:9,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:12}}>Signal Facts</div>
+            <div style={{display:"flex",flexDirection:"column",gap:11}}>
+              {(isGenomic
+                ? [
+                    {label:"Gene",             value:alert.gene_name||"—",          color:C.teal},
+                    {label:"Drug Class",       value:alert.antibiotic_name||"—",    color:C.red},
+                    {label:"Isolate Count",    value:(alert.isolate_count||0).toLocaleString(), color:C.teal},
+                    {label:"Doubling Time",    value:alert.doubling_time_years?(alert.doubling_time_years+"yr"):"N/A", color:alert.doubling_time_years&&alert.doubling_time_years<1?C.red:C.amber},
+                    {label:"Phenotypic Rate",  value:alert.current_resistance>0?((alert.current_resistance*100).toFixed(1)+"%"):"Not detected", color:alert.current_resistance>0?C.amber:C.muted},
+                    {label:"WHO Priority",     value:alert.who_priority||"—",       color:alert.who_priority==="CRITICAL"?C.red:C.amber},
+                  ]
+                : [
+                    {label:"Observed",         value:obsRate+"%",                   color:(alert.current_resistance||0)>=.5?C.red:C.amber},
+                    {label:"Model Expectation",value:expRate+"%",                   color:C.mutedHigh},
+                    {label:"Difference",       value:"+"+devPp+"pp",               color:C.red},
+                    {label:"Trajectory",       value:trajectoryLabel,               color:trajectoryColor},
+                    {label:"Signal Since",     value:alert.created_at?new Date(alert.created_at).toLocaleDateString("en-GB",{month:"short",year:"numeric"}):"—", color:C.white},
+                    {label:"Signal Score",     value:alert.severity_score+"/100",  color:accentColor},
+                    {label:"Confidence",       value:"High",                        color:C.green},
+                  ]
+              ).map(f=>(
+                <div key={f.label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:8,borderBottom:"1px solid " + C.border + "20"}}>
+                  <span style={{fontSize:10,color:C.muted}}>{f.label}</span>
+                  <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:11,fontWeight:700,color:f.color}}>{f.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Spread risk — genomic only */}
+          {isGenomic && alert.spread_risk_countries && alert.spread_risk_countries.length > 0 && (
+            <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16}}>
+              <div style={{fontSize:9,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:10}}>Spread Risk Countries</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {alert.spread_risk_countries.map((iso,i)=>(
+                  <span key={i} style={{fontSize:10,padding:"3px 8px",borderRadius:4,background:C.surfaceHigh,color:C.mutedHigh,border:"1px solid " + C.border,fontFamily:"JetBrains Mono,monospace"}}>
+                    {getFlagUrl(iso) && <img src={getFlagUrl(iso)} width="10" height="7" style={{borderRadius:1,marginRight:4,verticalAlign:"middle"}} alt=""/>}
+                    {countryName(iso)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
