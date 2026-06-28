@@ -151,24 +151,18 @@ const CSS = [
   "::-webkit-scrollbar-thumb:hover { background: " + C.borderHigh + "; }",
   ".mono { font-family: 'JetBrains Mono', monospace; }",
   "@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }",
-  ".mobile-topbar { display: none; }",
-  ".mobile-sidebar { display: none; }",
   "@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }",
   ".fade-up { animation: fadeUp .25s ease forwards; }",
   "@keyframes spin { to{transform:rotate(360deg)} }",
   "input, select, button { font-family: inherit; }",
   "button { cursor: pointer; }",
-  "@media (max-width: 768px) {",
-  "  .mobile-topbar { display: flex !important; }",
-  "  .mobile-sidebar { display: block !important; }",
-  "  .hide-mobile { display: none !important; }",
-  "  .sidebar-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:40; }",
-  "  .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }",
-  "  .stats-grid-3 { grid-template-columns: repeat(2, 1fr) !important; }",
-  "  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }",
-  "  .hide-mobile { display: none !important; }",
-  "  .main-content { padding: 12px !important; }",
-  "  .card-grid { grid-template-columns: 1fr !important; }",
+  ".mob-bar { display:none; }",
+  "@media (max-width:768px) {",
+  "  .mob-bar { display:flex !important; align-items:center; gap:10px; padding:10px 14px;",
+  "    background:" + C.sidebar + "; border-bottom:1px solid " + C.border + ";",
+  "    position:sticky; top:0; z-index:30; }",
+  "  .desk-sidebar { display:none !important; }",
+  "  .mob-sidebar-open { display:flex !important; }",
   "}",
 ].join("\n");
 
@@ -390,7 +384,7 @@ function CommandCenter({ onInvestigate, setScreen }) {
 
   return (
     <div className="fade-up" style={{padding:"20px 24px",maxWidth:1400}}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)"} className="stats-grid",gap:12,marginBottom:20}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:20}}>
         <StatCard label="Avg Lead Time" value={avgMonths + "mo"} sub="vs official reports" accent={C.teal} delta="+0.8 vs last month"/>
         <StatCard label="Signals Validated" value={stats?.validated_signals_count || 5} sub="outcome confirmed" accent={C.green}/>
         <StatCard label="Critical Alerts" value={stats?.critical_alerts || 0} sub="+5 new today" accent={C.red}/>
@@ -643,7 +637,7 @@ function ThreatOperations({ onInvestigate }) {
       </div>
 
       <div style={{background:C.surface,border:"1px solid " + C.border,borderTop:"none",borderRadius:"0 0 8px 8px",overflow:"hidden"}}>
-        <div className="table-scroll"><table style={{width:"100%",borderCollapse:"collapse"}}>
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead>
             <tr style={{background:C.surfaceHigh,borderBottom:"1px solid " + C.border}}>
               {["Severity","Threat / Pathogen","Country","Signal","Score","Type","Detected",""].map(h=>(
@@ -1451,8 +1445,8 @@ export default function App() {
   const [screen,      setScreen]      = useState("command");
   const [invAlert,    setInvAlert]    = useState(null);
   const [stats,       setStats]       = useState(null);
-  const [genomicCount, setGenomicCount] = useState(0);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [genomicCount,setGenomicCount]= useState(0);
+  const [mobOpen,     setMobOpen]     = useState(false);
 
   useEffect(() => {
     apiFetch("/stats").then(setStats);
@@ -1467,7 +1461,7 @@ export default function App() {
     setScreen("investigate");
   }, []);
 
-  const handleNav = (id) => { setScreen(id); setSidebarOpen(false); };
+  const nav = (id) => { setScreen(id); setMobOpen(false); };
 
   return (
     <>
@@ -1475,40 +1469,33 @@ export default function App() {
       <div style={{display:"flex",height:"100vh",overflow:"hidden",position:"relative"}}>
 
         {/* Mobile overlay */}
-        {sidebarOpen && (
-          <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)}/>
+        {mobOpen && (
+          <div onClick={() => setMobOpen(false)} style={{
+            position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:40,
+          }}/>
         )}
 
-        {/* Sidebar — hidden on mobile unless open */}
+        {/* Mobile slide-in sidebar */}
         <div style={{
-          position: "fixed",
-          left: sidebarOpen ? 0 : -240,
-          top: 0, bottom: 0,
-          zIndex: 50,
-          transition: "left .25s ease",
-          width: 220,
-        }} className="mobile-sidebar">
-          <Sidebar screen={screen} setScreen={handleNav} stats={stats} genomicCount={genomicCount}/>
+          position:"fixed",top:0,bottom:0,left:0,zIndex:50,
+          transform: mobOpen ? "translateX(0)" : "translateX(-100%)",
+          transition:"transform .22s ease",
+          width:220, display:"flex",
+        }}>
+          <Sidebar screen={screen} setScreen={nav} stats={stats} genomicCount={genomicCount}/>
         </div>
 
-        {/* Desktop sidebar — always visible */}
-        <div className="hide-mobile" style={{width:220, flexShrink:0}}>
+        {/* Desktop sidebar */}
+        <div className="desk-sidebar" style={{width:220,flexShrink:0}}>
           <Sidebar screen={screen} setScreen={setScreen} stats={stats} genomicCount={genomicCount}/>
         </div>
 
         <main style={{flex:1,overflowY:"auto",background:C.bg,minWidth:0}}>
           {/* Mobile top bar */}
-          <div style={{
-            display:"flex", alignItems:"center", gap:12,
-            padding:"10px 16px",
-            background:C.sidebar,
-            borderBottom:"1px solid " + C.border,
-            position:"sticky", top:0, zIndex:30,
-          }} className="mobile-topbar">
-            <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{
-              background:"none", border:"1px solid " + C.border,
-              borderRadius:6, color:C.white, padding:"6px 10px",
-              fontSize:16, lineHeight:1,
+          <div className="mob-bar">
+            <button onClick={() => setMobOpen(!mobOpen)} style={{
+              background:"none",border:"1px solid " + C.border,
+              borderRadius:6,color:C.white,padding:"5px 10px",fontSize:16,lineHeight:1,
             }}>☰</button>
             <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:13,fontWeight:700,color:C.white}}>AMR-Sentinel</span>
             <span style={{fontSize:9,color:C.muted,letterSpacing:".06em",textTransform:"uppercase"}}>Pathogen Intelligence</span>
