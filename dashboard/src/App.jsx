@@ -163,37 +163,15 @@ const CSS = [
   "    position:sticky; top:0; z-index:30; }",
   "  .desk-sidebar { display:none !important; }",
   "  .mob-sidebar-open { display:flex !important; }",
-  /* Card/grid overflow fixes */
-  "  .fade-up { padding: 12px 10px !important; }",
-  /* Force all direct grid/flex containers to wrap and stay within viewport */
-  "  [style*='display:flex'] { flex-wrap: wrap; min-width: 0; }",
-  "  [style*='display: flex'] { flex-wrap: wrap; min-width: 0; }",
-  /* Metric card rows — stack on mobile */
-  "  .metric-row { flex-direction: column !important; }",
-  /* Charts full width */
-  "  .recharts-wrapper { width: 100% !important; }",
-  /* Tables scroll horizontally */
-  "  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }",
-  /* Alert Investigation: header card stack */
-  "  .alert-header-grid { grid-template-columns: 1fr !important; }",
-  /* Prevent any element from overflowing viewport */
-  "  * { max-width: 100vw; word-break: break-word; }",
-  "  img { max-width: 100%; }",
-  /* Tabs: scroll horizontally instead of wrapping ugly */
-  "  .tab-row { overflow-x: auto; flex-wrap: nowrap !important; -webkit-overflow-scrolling: touch; }",
-  "  .tab-row::-webkit-scrollbar { display: none; }",
-  /* Recommended actions columns: stack on mobile */
-  "  .rec-actions-grid { grid-template-columns: 1fr !important; }",
-  /* Evidence/citation cards */
-  "  .citation-grid { grid-template-columns: 1fr !important; }",
-  /* Stat cards in command center */
-  "  .stat-grid { grid-template-columns: 1fr 1fr !important; }",
-  /* Full-width buttons on mobile */
-  "  .mob-full { width: 100% !important; }",
-  "}",
-  /* Slightly larger breakpoint for tablets */
-  "@media (max-width:900px) {",
-  "  .desk-sidebar { width: 180px !important; }",
+  "  .fade-up { padding: 10px 8px !important; }",
+  /* Stat rows: 2-col on mobile instead of 4/6 col */
+  "  .stat-row { grid-template-columns: 1fr 1fr !important; }",
+  /* Executive brief stat row */
+  "  .brief-stat-row { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }",
+  /* Overflow scroll for wide tables/rows */
+  "  .mob-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }",
+  /* Prevent text overflow in cards */
+  "  h1, h2, h3 { overflow-wrap: break-word; word-break: break-word; }",
   "}",
 ].join("\n");
 
@@ -415,7 +393,7 @@ function CommandCenter({ onInvestigate, setScreen }) {
 
   return (
     <div className="fade-up" style={{padding:"20px 24px",maxWidth:1400}}>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:20}}>
+      <div className="stat-row" style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:20}}>
         <StatCard label="Avg Lead Time" value={avgMonths + "mo"} sub="vs official reports" accent={C.teal} delta="+0.8 vs last month"/>
         <StatCard label="Signals Validated" value={stats?.validated_signals_count || 5} sub="outcome confirmed" accent={C.green}/>
         <StatCard label="Critical Alerts" value={stats?.critical_alerts || 0} sub="+5 new today" accent={C.red}/>
@@ -884,7 +862,7 @@ function GenomicIntelligence({ onInvestigate }) {
       </div>
 
       {/* Stat cards */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:16}}>
+      <div className="stat-row" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
         <StatCard label="Precursor Signals" value={signals.length} sub="gene present, phenotype low/absent" accent={C.teal}/>
         <StatCard label="HIGH Confidence" value={highConf} sub="ECDC-covered countries" accent={C.green}/>
         <StatCard label="Carbapenem Genes" value={carbapenem} sub="critical-tier resistance" accent={C.red}/>
@@ -1233,14 +1211,14 @@ function AlertInvestigation({ alert: init }) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
-              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:36,fontWeight:800,color:accentColor,lineHeight:1}}>{alert.severity_score}</div>
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:36,fontWeight:800,color:accentColor,lineHeight:1,flexShrink:0}}>{alert.severity_score}</div>
               <div>
                 <div style={{fontSize:9,color:C.muted,letterSpacing:".08em",textTransform:"uppercase",marginBottom:2}}>Intelligence Score</div>
                 {isGenomic ? <ConfBadge conf={alert.surveillance_confidence}/> : <SeverityBadge tier={alert.severity_tier}/>}
               </div>
               {isGenomic && <span style={{fontSize:11,background:C.tealDim,color:C.teal,padding:"3px 10px",borderRadius:4,border:"1px solid " + C.teal + "40",fontFamily:"JetBrains Mono,monospace",fontWeight:700}}>🧬 GENOMIC PRECURSOR</span>}
             </div>
-            <h1 style={{fontSize:20,fontWeight:700,color:C.white,marginBottom:4}}>
+            <h1 style={{fontSize:20,fontWeight:700,color:C.white,marginBottom:4,wordBreak:"break-word",overflowWrap:"anywhere"}}>
               {pName}
               <span style={{marginLeft:10,padding:"2px 8px",borderRadius:4,background:isGenomic?C.tealDim:C.blueDim,color:isGenomic?C.teal:C.blue,fontSize:12,fontWeight:500}}>
                 {isGenomic ? (alert.gene_name || "Genomic Signal") : (alert.antibiotic_name + " Resistance")}
@@ -1750,7 +1728,7 @@ function ExecutiveBrief({ setScreen }) {
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:20}}>
+      <div className="brief-stat-row stat-row" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:20}}>
         <StatCard label="Critical Threats" value={stats?.critical_alerts||0} sub="Requires immediate attention" accent={C.red}/>
         <StatCard label="Countries Affected" value={stats?.countries_monitored||8} sub="Under active surveillance" accent={C.blue}/>
         <StatCard label="Avg Lead Time" value={avgMonths + " months"} sub="vs official reports" accent={C.teal}/>
