@@ -1,6 +1,6 @@
 /**
  * dashboard/src/App.jsx
- * AMR-Sentinel — 6-screen dashboard with Genomic Intelligence layer
+ * AMR-Intel — 6-screen dashboard with Genomic Intelligence layer
  *
  * Screens:
  *   1. Command Center
@@ -163,6 +163,37 @@ const CSS = [
   "    position:sticky; top:0; z-index:30; }",
   "  .desk-sidebar { display:none !important; }",
   "  .mob-sidebar-open { display:flex !important; }",
+  /* Card/grid overflow fixes */
+  "  .fade-up { padding: 12px 10px !important; }",
+  /* Force all direct grid/flex containers to wrap and stay within viewport */
+  "  [style*='display:flex'] { flex-wrap: wrap; min-width: 0; }",
+  "  [style*='display: flex'] { flex-wrap: wrap; min-width: 0; }",
+  /* Metric card rows — stack on mobile */
+  "  .metric-row { flex-direction: column !important; }",
+  /* Charts full width */
+  "  .recharts-wrapper { width: 100% !important; }",
+  /* Tables scroll horizontally */
+  "  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }",
+  /* Alert Investigation: header card stack */
+  "  .alert-header-grid { grid-template-columns: 1fr !important; }",
+  /* Prevent any element from overflowing viewport */
+  "  * { max-width: 100vw; word-break: break-word; }",
+  "  img { max-width: 100%; }",
+  /* Tabs: scroll horizontally instead of wrapping ugly */
+  "  .tab-row { overflow-x: auto; flex-wrap: nowrap !important; -webkit-overflow-scrolling: touch; }",
+  "  .tab-row::-webkit-scrollbar { display: none; }",
+  /* Recommended actions columns: stack on mobile */
+  "  .rec-actions-grid { grid-template-columns: 1fr !important; }",
+  /* Evidence/citation cards */
+  "  .citation-grid { grid-template-columns: 1fr !important; }",
+  /* Stat cards in command center */
+  "  .stat-grid { grid-template-columns: 1fr 1fr !important; }",
+  /* Full-width buttons on mobile */
+  "  .mob-full { width: 100% !important; }",
+  "}",
+  /* Slightly larger breakpoint for tablets */
+  "@media (max-width:900px) {",
+  "  .desk-sidebar { width: 180px !important; }",
   "}",
 ].join("\n");
 
@@ -297,7 +328,7 @@ function Sidebar({ screen, setScreen, stats, genomicCount }) {
             fontSize:16,
           }}>⬡</div>
           <div>
-            <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:13,fontWeight:700,color:C.white,letterSpacing:".04em"}}>AMR-Sentinel</div>
+            <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:13,fontWeight:700,color:C.white,letterSpacing:".04em"}}>AMR-Intel</div>
             <div style={{fontSize:9,color:C.muted,letterSpacing:".06em",textTransform:"uppercase"}}>Pathogen Intelligence</div>
           </div>
         </div>
@@ -853,7 +884,7 @@ function GenomicIntelligence({ onInvestigate }) {
       </div>
 
       {/* Stat cards */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:16}}>
         <StatCard label="Precursor Signals" value={signals.length} sub="gene present, phenotype low/absent" accent={C.teal}/>
         <StatCard label="HIGH Confidence" value={highConf} sub="ECDC-covered countries" accent={C.green}/>
         <StatCard label="Carbapenem Genes" value={carbapenem} sub="critical-tier resistance" accent={C.red}/>
@@ -1237,7 +1268,7 @@ function AlertInvestigation({ alert: init }) {
           </div>
 
           {/* Metric cards */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,textAlign:"center",minWidth:340}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,textAlign:"center"}}>
             {(isGenomic
               ? [
                   {label:"Isolate Count",     value:(alert.isolate_count||0).toLocaleString(), color:C.teal},
@@ -1246,7 +1277,7 @@ function AlertInvestigation({ alert: init }) {
                   {label:"Signal Score",      value:alert.severity_score + "/100", color:accentColor},
                 ]
               : [
-                  {label:"Observed Resistance", value:obsRate + "%",      color:(alert.current_resistance||0)>=.5?C.red:C.amber},
+                  {label:"Observed", value:obsRate + "%",      color:(alert.current_resistance||0)>=.5?C.red:C.amber},
                   {label:"Forecast Resistance", value:expRate + "%",      color:C.mutedHigh},
                   {label:"Above Forecast",      value:"+" + devPp + "pp", color:C.red},
                   {label:"Confidence",          value:"High",             color:C.green},
@@ -1439,7 +1470,7 @@ function AlertInvestigation({ alert: init }) {
                           <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Situation Assessment</div>
                           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
                             {[
-                              {l:"Observed Resistance", v:obsRate+"%",   c:(alert.current_resistance||0)>=.5?C.red:C.amber},
+                              {l:"Observed", v:obsRate+"%",   c:(alert.current_resistance||0)>=.5?C.red:C.amber},
                               {l:"Forecast Resistance", v:expRate+"%",   c:C.mutedHigh},
                               {l:"Above Forecast",      v:"+"+devPp+"pp",c:C.red},
                               {l:"Trajectory",          v:trajectoryLabel, c:trajectoryColor},
@@ -1709,7 +1740,7 @@ function ExecutiveBrief({ setScreen }) {
     <div className="fade-up" style={{padding:"20px 24px",maxWidth:1200}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
         <div>
-          <div style={{fontSize:11,color:C.muted,letterSpacing:".08em",textTransform:"uppercase",marginBottom:4}}>AMR-Sentinel · Executive Intelligence Brief</div>
+          <div style={{fontSize:11,color:C.muted,letterSpacing:".08em",textTransform:"uppercase",marginBottom:4}}>AMR-Intel · Executive Intelligence Brief</div>
           <h1 style={{fontSize:22,fontWeight:700,color:C.white}}>Executive Intelligence Brief</h1>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -1906,7 +1937,7 @@ export default function App() {
               background:"none",border:"1px solid " + C.border,
               borderRadius:6,color:C.white,padding:"5px 10px",fontSize:16,lineHeight:1,
             }}>☰</button>
-            <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:13,fontWeight:700,color:C.white}}>AMR-Sentinel</span>
+            <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:13,fontWeight:700,color:C.white}}>AMR-Intel</span>
             <span style={{fontSize:9,color:C.muted,letterSpacing:".06em",textTransform:"uppercase"}}>Pathogen Intelligence</span>
           </div>
 
