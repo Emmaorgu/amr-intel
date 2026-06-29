@@ -1142,25 +1142,53 @@ function AlertInvestigation({ alert: init }) {
   // Structured bulletin sections parsed from stewardship_guidance
   function renderStructuredBulletin(text) {
     if(!text) return <Empty msg="Intelligence report not yet generated"/>;
+
+    // Known section headers in the 6-section intelligence report format
+    var SECTION_HEADERS = [
+      "EXECUTIVE SUMMARY",
+      "SITUATION ASSESSMENT",
+      "POSSIBLE DRIVERS",
+      "RECOMMENDED ACTIONS",
+      "CONFIDENCE ASSESSMENT",
+      "STRATEGIC IMPLICATIONS"
+    ];
+
+    // Normalise: inject \n\n before each section header wherever it appears
+    // mid-line (handles bulletins where header and content are on the same line)
+    var normalised = text;
+    SECTION_HEADERS.forEach(function(header) {
+      // Replace occurrences of the header that are NOT already at the start of a line
+      var re = new RegExp("(?<!\n)(" + header + ")", "g");
+      normalised = normalised.replace(re, "\n\n" + header + "\n");
+    });
+
     // Split on double newlines for paragraphs
-    const paragraphs = text.split(/\n\n+/).filter(Boolean);
+    var paragraphs = normalised.split(/\n\n+/).filter(Boolean);
     return (
       <div style={{display:"flex",flexDirection:"column",gap:20}}>
-        {paragraphs.map((para, i) => {
-          const lines = para.trim().split("\n").filter(Boolean);
+        {paragraphs.map(function(para, i) {
+          var lines = para.trim().split("\n").filter(Boolean);
           if(lines.length === 0) return null;
-          // Detect section headers (ALL CAPS lines or lines ending with :)
-          const firstLine = lines[0].trim();
-          const isHeader = firstLine === firstLine.toUpperCase() && firstLine.length < 60 && /[A-Z]/.test(firstLine);
-          if(isHeader && lines.length > 1) {
+          var firstLine = lines[0].trim();
+          // A line is a section header if it matches one of the known headers
+          var isSectionHeader = SECTION_HEADERS.indexOf(firstLine) !== -1;
+          // Also catch any ALL-CAPS short line as a fallback
+          var isAllCapsHeader = !isSectionHeader && firstLine === firstLine.toUpperCase() && firstLine.length < 60 && /[A-Z]{3}/.test(firstLine);
+          var isHeader = isSectionHeader || isAllCapsHeader;
+
+          if(isHeader) {
+            var content = lines.slice(1).join(" ").trim();
+            if(!content) return (
+              <div key={i} style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",paddingBottom:6,borderBottom:"1px solid " + C.border}}>{firstLine}</div>
+            );
             return (
               <div key={i}>
                 <div style={{fontSize:9,color:accentColor,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>{firstLine}</div>
-                <div style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85}}>{lines.slice(1).join("\n")}</div>
+                <div style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85}}>{content}</div>
               </div>
             );
           }
-          return <div key={i} style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85}}>{para}</div>;
+          return <div key={i} style={{color:C.mutedHigh,fontSize:13,lineHeight:1.85}}>{para.trim()}</div>;
         })}
       </div>
     );
