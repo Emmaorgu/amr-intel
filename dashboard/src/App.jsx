@@ -362,6 +362,360 @@ function Sidebar({ screen, setScreen, stats, genomicCount }) {
   );
 }
 
+
+// ─── Global Intelligence Map ──────────────────────────────────────────────────
+function GlobalIntelMap({ alerts, onInvestigate, setScreen }) {
+  const [layer,    setLayer]    = useState("alerts");   // alerts | genomic | heatmap
+  const [selected, setSelected] = useState(null);       // selected country ISO3
+  const [hovered,  setHovered]  = useState(null);
+
+  // Country coordinate map — SVG viewBox 0 0 900 440
+  const COORDS = {
+    // Europe
+    BGR:{x:555,y:178},HRV:{x:524,y:170},CYP:{x:578,y:196},ROU:{x:558,y:168},
+    GRC:{x:542,y:192},SVK:{x:534,y:162},POL:{x:532,y:150},CZE:{x:523,y:158},
+    ITA:{x:520,y:182},LTU:{x:544,y:140},LVA:{x:544,y:132},HUN:{x:536,y:166},
+    DEU:{x:514,y:150},FRA:{x:504,y:168},ESP:{x:494,y:182},SWE:{x:530,y:128},
+    NOR:{x:518,y:118},FIN:{x:548,y:116},DNK:{x:514,y:136},LUX:{x:508,y:158},
+    MLT:{x:528,y:200},ISL:{x:468,y:116},GBR:{x:492,y:144},NLD:{x:506,y:146},
+    BEL:{x:504,y:154},AUT:{x:526,y:164},CHE:{x:512,y:166},PRT:{x:486,y:180},
+    EST:{x:548,y:126},SVN:{x:524,y:168},
+    // Africa
+    NGA:{x:516,y:238},GHA:{x:500,y:242},CMR:{x:528,y:238},KEN:{x:560,y:252},
+    EGY:{x:556,y:206},MAR:{x:490,y:200},ZAF:{x:536,y:296},CIV:{x:498,y:246},
+    SEN:{x:482,y:236},ZMB:{x:548,y:272},MWI:{x:556,y:272},MOZ:{x:556,y:282},
+    OMN:{x:590,y:218},BHR:{x:584,y:212},
+    // Middle East / South Asia
+    SAU:{x:574,y:214},TUR:{x:562,y:184},UKR:{x:554,y:158},
+    IND:{x:626,y:226},BGD:{x:640,y:216},PAK:{x:614,y:206},
+    IRN:{x:592,y:198},LBN:{x:566,y:194},
+    // East / SE Asia
+    CHN:{x:674,y:188},JPN:{x:728,y:176},KOR:{x:716,y:182},
+    THA:{x:660,y:234},IDN:{x:690,y:262},PHL:{x:712,y:238},
+    VNM:{x:672,y:234},MYS:{x:678,y:252},SGP:{x:682,y:258},
+    MMR:{x:652,y:216},LAO:{x:666,y:222},
+    // Americas
+    USA:{x:170,y:178},BRA:{x:262,y:270},MEX:{x:138,y:210},
+    ARG:{x:240,y:320},COL:{x:218,y:256},PER:{x:218,y:278},
+    CHL:{x:228,y:308},BTN:{x:644,y:204},NAM:{x:522,y:288},
+    // Oceania
+    AUS:{x:734,y:308},NZL:{x:782,y:344},
+    // Central Asia
+    MLI:{x:498,y:220},MWI:{x:556,y:272},
+  };
+
+  // Build per-country intelligence summary from alerts
+  var countryData = {};
+  alerts.forEach(function(a) {
+    var iso = a.country_iso3;
+    if (!iso) return;
+    if (!countryData[iso]) {
+      countryData[iso] = {
+        iso3: iso,
+        alerts: [],
+        maxScore: 0,
+        topTier: "monitor",
+        hasGenomic: false,
+        isNew: false,
+        resistanceRates: [],
+      };
+    }
+    var cd = countryData[iso];
+    cd.alerts.push(a);
+    if ((a.severity_score || 0) > cd.maxScore) {
+      cd.maxScore = a.severity_score || 0;
+      cd.topTier = a.severity_tier || "monitor";
+    }
+    if (a.signal_type === "genomic_precursor") cd.hasGenomic = true;
+    // Mark as new if detected within last 7 days
+    if (a.created_at) {
+      var age = (Date.now() - new Date(a.created_at).getTime()) / (1000 * 60 * 60 * 24);
+      if (age < 7) cd.isNew = true;
+    }
+    if (a.signal_type !== "genomic_precursor" && a.current_resistance) {
+      cd.resistanceRates.push(a.current_resistance);
+    }
+  });
+
+  // Get selected country detail
+  var selData = selected ? countryData[selected] : null;
+  var selAlerts = selData ? selData.alerts.filter(function(a){ return a.signal_type !== "genomic_precursor"; }).sort(function(a,b){ return (b.severity_score||0)-(a.severity_score||0); }) : [];
+  var selGenomic = selData ? selData.alerts.filter(function(a){ return a.signal_type === "genomic_precursor"; }) : [];
+
+  // Layer button style helper
+  function layerBtn(id, label) {
+    var active = layer === id;
+    return (
+      <button key={id} onClick={function(){ setLayer(id); setSelected(null); }} style={{
+        background: active ? C.accent : "transparent",
+        border: "1px solid " + (active ? C.accent : C.border),
+        color: active ? C.white : C.muted,
+        borderRadius: 4, padding: "3px 10px", fontSize: 10, cursor: "pointer",
+        fontWeight: active ? 600 : 400, letterSpacing: ".04em",
+      }}>{label}</button>
+    );
+  }
+
+  // Render a single marker
+  function renderMarker(iso3, cd, i) {
+    if (!COORDS[iso3]) return null;
+    var pos = COORDS[iso3];
+    var isSelected = selected === iso3;
+    var isHov = hovered === iso3;
+
+    // Layer: genomic only — show blue ring markers
+    if (layer === "genomic") {
+      if (!cd.hasGenomic && cd.alerts.every(function(a){ return a.signal_type !== "genomic_precursor"; })) return null;
+      var hasPhenotypic = cd.resistanceRates.length > 0;
+      var gColor = hasPhenotypic ? "#F59E0B" : "#3B82F6";
+      var label = hasPhenotypic ? "Gene+Pheno" : "Gene only";
+      return (
+        <g key={iso3} style={{cursor:"pointer"}} onClick={function(){ setSelected(isSelected ? null : iso3); }}
+          onMouseEnter={function(){ setHovered(iso3); }} onMouseLeave={function(){ setHovered(null); }}>
+          <circle cx={pos.x} cy={pos.y} r={isSelected||isHov?10:7} fill="transparent" stroke={gColor} strokeWidth={isSelected?2.5:1.5} opacity=".9"/>
+          <circle cx={pos.x} cy={pos.y} r={3} fill={gColor} opacity=".7"/>
+          {(isHov || isSelected) && (
+            <text x={pos.x+12} y={pos.y+4} fill={gColor} fontSize="8" fontWeight="600">{iso3}</text>
+          )}
+        </g>
+      );
+    }
+
+    // Layer: heatmap — filled squares by resistance rate
+    if (layer === "heatmap") {
+      var avgRate = cd.resistanceRates.length > 0
+        ? cd.resistanceRates.reduce(function(a,b){ return a+b; }, 0) / cd.resistanceRates.length
+        : 0;
+      if (avgRate === 0) return null;
+      var hColor = avgRate >= 0.6 ? "#EF4444" : avgRate >= 0.4 ? "#F59E0B" : avgRate >= 0.2 ? "#3B82F6" : "#1E3A5F";
+      var sz = isSelected || isHov ? 9 : 7;
+      return (
+        <g key={iso3} style={{cursor:"pointer"}} onClick={function(){ setSelected(isSelected ? null : iso3); }}
+          onMouseEnter={function(){ setHovered(iso3); }} onMouseLeave={function(){ setHovered(null); }}>
+          <rect x={pos.x-sz/2} y={pos.y-sz/2} width={sz} height={sz} fill={hColor} opacity=".85" rx="1"/>
+          {(isHov || isSelected) && (
+            <text x={pos.x+8} y={pos.y+4} fill={hColor} fontSize="8" fontWeight="600">{iso3} {(avgRate*100).toFixed(0)+"%"}</text>
+          )}
+        </g>
+      );
+    }
+
+    // Layer: alerts (default) — sized/colored circles
+    var score = cd.maxScore;
+    var tier = cd.topTier;
+    var color = tier === "critical" ? "#EF4444" : tier === "warn" ? "#F59E0B" : "#3B82F6";
+    // Size = score magnitude
+    var r = score >= 98 ? 9 : score >= 90 ? 7 : score >= 80 ? 5.5 : 4;
+    if (isSelected) r = r + 2;
+    // New alert = pulse animation
+    var dur = (1.8 + i * 0.15) + "s";
+    var shouldPulse = cd.isNew;
+    // Genomic ring
+    var showRing = cd.hasGenomic && tier !== "critical";
+
+    return (
+      <g key={iso3} style={{cursor:"pointer"}}
+        onClick={function(){ setSelected(isSelected ? null : iso3); }}
+        onMouseEnter={function(){ setHovered(iso3); }}
+        onMouseLeave={function(){ setHovered(null); }}>
+        {/* Glow */}
+        <circle cx={pos.x} cy={pos.y} r={r * 2.4} fill={color} opacity={isSelected ? ".18" : ".09"}/>
+        {/* Genomic precursor ring */}
+        {showRing && (
+          <circle cx={pos.x} cy={pos.y} r={r + 4} fill="transparent" stroke="#3B82F6" strokeWidth="1.2" opacity=".7" strokeDasharray="3 2"/>
+        )}
+        {/* Main dot */}
+        {shouldPulse ? (
+          <circle cx={pos.x} cy={pos.y} r={r} fill={color} opacity=".95">
+            <animate attributeName="r" values={r + ";" + Math.round(r*1.6) + ";" + r} dur={dur} repeatCount="indefinite"/>
+            <animate attributeName="opacity" values=".95;.3;.95" dur={dur} repeatCount="indefinite"/>
+          </circle>
+        ) : (
+          <circle cx={pos.x} cy={pos.y} r={r} fill={color} opacity={isSelected ? "1" : ".9"}/>
+        )}
+        {/* Selected highlight ring */}
+        {isSelected && (
+          <circle cx={pos.x} cy={pos.y} r={r + 3} fill="transparent" stroke={color} strokeWidth="1.5" opacity=".8"/>
+        )}
+        {/* Hover label */}
+        {(isHov && !isSelected) && (
+          <text x={pos.x + r + 4} y={pos.y + 4} fill={color} fontSize="8" fontWeight="600">{iso3}</text>
+        )}
+      </g>
+    );
+  }
+
+  var dots = Object.entries(countryData);
+
+  return (
+    <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16,flex:1}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <SectionTitle>Global Intelligence Map</SectionTitle>
+        <div style={{display:"flex",gap:4}}>
+          {layerBtn("alerts","Active Alerts")}
+          {layerBtn("genomic","Genomic")}
+          {layerBtn("heatmap","Heatmap")}
+        </div>
+      </div>
+
+      {/* Map + side panel */}
+      <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+        {/* SVG Map */}
+        <div style={{flex:1,background:"linear-gradient(160deg,#080F1C,#0A1220)",borderRadius:6,position:"relative",overflow:"hidden",border:"1px solid " + C.border,minHeight:200}}>
+          <svg viewBox="0 0 900 440" style={{width:"100%",height:"100%",display:"block"}} preserveAspectRatio="xMidYMid meet">
+            <defs>
+              <radialGradient id="mapGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#0D2040" stopOpacity=".6"/>
+                <stop offset="100%" stopColor="#050B14" stopOpacity="1"/>
+              </radialGradient>
+            </defs>
+            <rect width="900" height="440" fill="url(#mapGlow)"/>
+            {/* Continent blobs — simplified but recognisable */}
+            {/* North America */}
+            <path d="M52,72 L98,64 L138,66 L170,70 L196,80 L214,100 L224,126 L220,158 L208,184 L192,208 L172,220 L148,218 L126,224 L106,220 L86,204 L66,178 L54,148 L48,118 L48,92 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
+            {/* South America */}
+            <path d="M182,230 L220,222 L252,224 L278,228 L294,246 L298,268 L292,296 L278,318 L258,334 L236,336 L214,322 L198,300 L190,274 L184,248 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
+            {/* Europe */}
+            <path d="M456,96 L490,90 L524,88 L554,90 L576,104 L582,124 L576,148 L560,168 L538,180 L514,182 L490,176 L468,162 L456,144 L450,120 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
+            {/* Africa */}
+            <path d="M466,182 L504,176 L538,178 L564,186 L580,204 L582,232 L576,262 L562,290 L544,308 L520,312 L496,306 L474,290 L458,266 L452,238 L452,210 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
+            {/* Asia (mainland) */}
+            <path d="M554,76 L614,70 L672,68 L728,72 L772,82 L796,100 L800,124 L794,152 L776,174 L748,192 L714,206 L676,212 L640,208 L606,198 L574,182 L556,162 L548,136 L550,108 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
+            {/* SE Asia / Indonesia */}
+            <path d="M656,230 L694,226 L730,228 L756,240 L762,260 L752,278 L730,286 L704,282 L680,268 L662,250 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
+            {/* Australia */}
+            <path d="M696,290 L738,284 L774,288 L800,304 L806,328 L796,352 L770,364 L738,360 L710,344 L698,320 L696,304 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
+            {/* Graticule lines (subtle) */}
+            <line x1="0" y1="220" x2="900" y2="220" stroke="#0D1E30" strokeWidth=".4"/>
+            <line x1="450" y1="0" x2="450" y2="440" stroke="#0D1E30" strokeWidth=".4"/>
+            {/* Markers */}
+            {dots.map(function([iso3, cd], i) { return renderMarker(iso3, cd, i); })}
+          </svg>
+
+          {/* Legend */}
+          <div style={{position:"absolute",bottom:6,left:8,display:"flex",gap:10,fontSize:8,color:"#64748B",background:"rgba(8,15,28,.75)",padding:"4px 8px",borderRadius:4,backdropFilter:"blur(4px)"}}>
+            {layer === "alerts" && [
+              ["Critical","#EF4444"],["High","#F59E0B"],["Watch","#3B82F6"],["Genomic ring","#3B82F6"],
+            ].map(function(item) {
+              return (
+                <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}>
+                  {item[0] === "Genomic ring"
+                    ? <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="none" stroke={item[1]} strokeWidth="1.2" strokeDasharray="2 1"/></svg>
+                    : <div style={{width:7,height:7,borderRadius:"50%",background:item[1]}}/>
+                  }
+                  {item[0]}
+                </div>
+              );
+            })}
+            {layer === "genomic" && [["Gene only","#3B82F6"],["Gene+Pheno","#F59E0B"]].map(function(item) {
+              return (
+                <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}>
+                  <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="none" stroke={item[1]} strokeWidth="1.2"/></svg>
+                  {item[0]}
+                </div>
+              );
+            })}
+            {layer === "heatmap" && [["<20%","#1E3A5F"],["20-40%","#3B82F6"],["40-60%","#F59E0B"],[">60%","#EF4444"]].map(function(item) {
+              return (
+                <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}>
+                  <div style={{width:7,height:7,borderRadius:1,background:item[1]}}/>
+                  {item[0]}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* New alert pulse indicator */}
+          {layer === "alerts" && dots.some(function(e){ return e[1].isNew; }) && (
+            <div style={{position:"absolute",top:6,right:8,display:"flex",alignItems:"center",gap:4,fontSize:8,color:C.green,background:"rgba(8,15,28,.75)",padding:"3px 6px",borderRadius:3}}>
+              <div style={{width:5,height:5,borderRadius:"50%",background:C.green,animation:"pulse 1.5s infinite"}}/>
+              Pulsing = new (&lt;7 days)
+            </div>
+          )}
+        </div>
+
+        {/* Country side panel — shown when a country is selected */}
+        {selData && (
+          <div style={{width:170,flexShrink:0,background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6,padding:12,fontSize:11}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontWeight:700,color:C.white,fontSize:12}}>{countryName(selData.iso3)}</div>
+              <button onClick={function(){ setSelected(null); }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,lineHeight:1}}>×</button>
+            </div>
+
+            {/* Score + tier */}
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:22,fontWeight:800,color:selData.topTier==="critical"?C.red:C.amber}}>{selData.maxScore}</div>
+              <div style={{fontSize:9,padding:"2px 5px",borderRadius:3,background:selData.topTier==="critical"?C.redDim:C.amberDim,color:selData.topTier==="critical"?C.red:C.amber,fontWeight:700,letterSpacing:".06em"}}>{(TIER_LABEL[selData.topTier]||"WATCH")}</div>
+            </div>
+
+            {/* Stats row */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
+              <div style={{background:C.surface,borderRadius:4,padding:"5px 7px"}}>
+                <div style={{fontSize:8,color:C.muted,marginBottom:2}}>ALERTS</div>
+                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:14,fontWeight:700,color:C.white}}>{selData.alerts.filter(function(a){ return a.signal_type!=="genomic_precursor"; }).length}</div>
+              </div>
+              <div style={{background:C.surface,borderRadius:4,padding:"5px 7px"}}>
+                <div style={{fontSize:8,color:C.muted,marginBottom:2}}>GENES</div>
+                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:14,fontWeight:700,color:C.blue}}>{selGenomic.length}</div>
+              </div>
+            </div>
+
+            {/* Top pathogens */}
+            {selAlerts.length > 0 && (
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:8,color:C.muted,fontWeight:600,letterSpacing:".06em",marginBottom:4}}>TOP PATHOGENS</div>
+                {selAlerts.slice(0,3).map(function(a, i) {
+                  return (
+                    <div key={i} style={{fontSize:10,color:C.mutedHigh,marginBottom:2,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}
+                      onClick={function(){ onInvestigate && onInvestigate(a); }}>
+                      <div style={{width:5,height:5,borderRadius:"50%",background:TIER_COLOR[a.severity_tier]||C.blue,flexShrink:0}}/>
+                      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {(a.pathogen_name||"").replace("Klebsiella pneumoniae","K. pneu.").replace("Staphylococcus aureus","S. aureus").replace("Escherichia coli","E. coli").replace("Enterococcus faecium","E. faecium").replace("Pseudomonas aeruginosa","P. aerug.").replace("Acinetobacter spp.","Acinetobacter")}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Genomic genes */}
+            {selGenomic.length > 0 && (
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:8,color:C.muted,fontWeight:600,letterSpacing:".06em",marginBottom:4}}>DETECTED GENES</div>
+                {[...new Set(selGenomic.map(function(a){ return a.gene_name; }).filter(Boolean))].slice(0,4).map(function(g, i) {
+                  return (
+                    <div key={i} style={{fontSize:9,color:C.blue,marginBottom:1,fontFamily:"JetBrains Mono,monospace"}}>• {g}</div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Trend */}
+            {selAlerts.length > 0 && (
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:8,color:C.muted,fontWeight:600,letterSpacing:".06em",marginBottom:3}}>TREND</div>
+                <div style={{fontSize:10,color:selAlerts[0].trend_direction==="rising"?C.red:selAlerts[0].trend_direction==="falling"?C.green:C.muted}}>
+                  {selAlerts[0].trend_direction==="rising"?"↑ Increasing":selAlerts[0].trend_direction==="falling"?"↓ Decreasing":"→ Stable"}
+                </div>
+              </div>
+            )}
+
+            {/* Investigate CTA */}
+            {selAlerts.length > 0 && (
+              <button onClick={function(){ onInvestigate && onInvestigate(selAlerts[0]); }} style={{
+                width:"100%",background:C.accent,border:"none",color:C.white,
+                borderRadius:4,padding:"5px 8px",fontSize:10,cursor:"pointer",fontWeight:600,
+                marginTop:2,
+              }}>Investigate →</button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Screen 1: Command Center ─────────────────────────────────────────────────
 function CommandCenter({ onInvestigate, setScreen }) {
   const [stats,   setStats]   = useState(null);
@@ -423,70 +777,8 @@ function CommandCenter({ onInvestigate, setScreen }) {
         </div>
 
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
-          <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:18,flex:1}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <SectionTitle>Global Intelligence Map</SectionTitle>
-              <select style={{background:C.surfaceHigh,border:"1px solid " + C.border,color:C.mutedHigh,borderRadius:4,padding:"3px 8px",fontSize:11}}>
-                <option>Emergence Risk</option><option>Resistance Rate</option>
-              </select>
-            </div>
-            {(() => {
-              const COORDS = {
-                BGR:{x:530,y:152},HRV:{x:505,y:146},CYP:{x:558,y:168},ROU:{x:537,y:146},
-                GRC:{x:525,y:163},SVK:{x:516,y:140},POL:{x:516,y:132},CZE:{x:508,y:138},
-                ITA:{x:505,y:156},LTU:{x:527,y:126},LVA:{x:529,y:120},HUN:{x:520,y:145},
-                DEU:{x:503,y:132},FRA:{x:493,y:148},ESP:{x:486,y:158},SWE:{x:516,y:116},
-                LUX:{x:499,y:140},MLT:{x:514,y:170},ISL:{x:466,y:106},GBR:{x:486,y:128},
-                NLD:{x:496,y:130},BEL:{x:495,y:135},AUT:{x:510,y:143},CHE:{x:500,y:145},
-                NGA:{x:502,y:210},GHA:{x:490,y:213},CMR:{x:512,y:212},KEN:{x:542,y:218},
-                EGY:{x:540,y:183},MAR:{x:481,y:176},ZAF:{x:525,y:255},
-                BGD:{x:624,y:188},IND:{x:615,y:194},PAK:{x:602,y:180},
-                SAU:{x:560,y:186},USA:{x:172,y:158},BRA:{x:268,y:238},
-                CHN:{x:658,y:168},JPN:{x:708,y:156},TUR:{x:546,y:161},UKR:{x:540,y:138},
-              };
-              const hotspots = alerts.reduce((acc, a) => {
-                if (!COORDS[a.country_iso3]) return acc;
-                if (!acc[a.country_iso3] || a.severity_score > acc[a.country_iso3].score) {
-                  acc[a.country_iso3] = {...COORDS[a.country_iso3], score:a.severity_score, tier:a.severity_tier};
-                }
-                return acc;
-              }, {});
-              const dots = Object.entries(hotspots);
-              return (
-                <div style={{background:"linear-gradient(160deg,#0A1628,#0B1520)",borderRadius:6,height:190,position:"relative",overflow:"hidden",border:"1px solid " + C.border}}>
-                  <svg viewBox="0 0 800 400" style={{width:"100%",height:"100%"}} preserveAspectRatio="xMidYMid meet">
-                    <path d="M62,82 L100,76 L130,78 L165,80 L195,88 L220,106 L232,124 L228,148 L218,168 L205,188 L190,204 L172,210 L154,208 L136,214 L118,210 L100,194 L82,172 L68,148 L60,122 L58,100 Z" fill="#152236" opacity=".85"/>
-                    <path d="M188,216 L220,210 L248,210 L272,214 L290,228 L295,248 L290,272 L278,294 L260,308 L240,310 L220,298 L204,278 L196,256 L190,232 Z" fill="#152236" opacity=".85"/>
-                    <path d="M450,94 L480,90 L510,88 L540,88 L568,92 L584,106 L586,124 L580,144 L565,162 L546,172 L524,174 L504,172 L482,166 L464,154 L452,138 L446,118 Z" fill="#152236" opacity=".85"/>
-                    <path d="M460,174 L490,170 L520,170 L548,172 L568,180 L580,196 L580,220 L574,246 L560,268 L542,282 L520,286 L498,282 L478,270 L462,252 L454,228 L454,204 Z" fill="#152236" opacity=".85"/>
-                    <path d="M550,84 L600,80 L650,78 L700,80 L740,86 L766,100 L772,118 L768,142 L756,164 L736,182 L712,196 L686,204 L658,204 L630,198 L604,188 L578,174 L560,158 L550,138 L546,116 Z" fill="#152236" opacity=".85"/>
-                    <path d="M672,244 L710,240 L746,242 L768,256 L772,276 L762,296 L742,308 L716,308 L692,296 L676,278 L668,258 Z" fill="#152236" opacity=".85"/>
-                    {dots.map(([iso3, d], i) => {
-                      const color = d.tier==="critical" ? "#EF4444" : d.tier==="warn" ? "#F59E0B" : "#3B82F6";
-                      const r = d.score>=98 ? 8 : d.score>=90 ? 6 : 4;
-                      return (
-                        <g key={iso3}>
-                          <circle cx={d.x} cy={d.y} r={r*2.2} fill={color} opacity=".12"/>
-                          <circle cx={d.x} cy={d.y} r={r} fill={color} opacity=".95">
-                            <animate attributeName="r" values={r+";"+Math.round(r*1.7)+";"+r} dur={(1.8+i*0.25)+"s"} repeatCount="indefinite"/>
-                            <animate attributeName="opacity" values=".95;.35;.95" dur={(1.8+i*0.25)+"s"} repeatCount="indefinite"/>
-                          </circle>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                  <div style={{position:"absolute",bottom:6,left:10,display:"flex",gap:10,fontSize:8,color:"#64748B"}}>
-                    {[["Low","#1E3A5F"],["Medium","#2563EB"],["High","#F59E0B"],["Very High","#EF4444"]].map(([l,co]) => (
-                      <div key={l} style={{display:"flex",alignItems:"center",gap:3}}>
-                        <div style={{width:7,height:7,borderRadius:1,background:co}}/>
-                        {l}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
+          {/* ── Global Intelligence Map (Level 1+2) ── */}
+          <GlobalIntelMap alerts={alerts} onInvestigate={onInvestigate} setScreen={setScreen}/>
 
           <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16}}>
             <div style={{display:"flex",gap:0}}>
