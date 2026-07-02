@@ -44,8 +44,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
-  # ─── 2. Orchestrator — Cron Job (runs every 6 hours, free tier) ──────────
-  # Cron jobs are supported on free tier. Runs --run-once and exits cleanly.
+  # ─── 2. Pipeline Cron Job (every 6 hours — signal detection + bulletins) ─
   - type: cron
     name: amr-sentinel-pipeline
     runtime: python
@@ -83,11 +82,48 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
-  # ─── 3. React Dashboard (Static Site — always free) ──────────────────────
+  # ─── 3. Daily Full Pipeline (02:00 UTC — ingestion + detection + bulletins)
+  # Runs full ingestion (GLASS, ECDC delta) + pipeline + bulletin backfill
+  - type: cron
+    name: amr-intel-daily-pipeline
+    runtime: python
+    region: oregon
+    schedule: "0 2 * * *"
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: python -m amr_sentinel.scripts.daily_pipeline
+    envVars:
+      - key: DB_USER
+        fromDatabase:
+          name: amr-sentinel-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: amr-sentinel-db
+          property: password
+      - key: DB_HOST
+        fromDatabase:
+          name: amr-sentinel-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: amr-sentinel-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: amr-sentinel-db
+          property: database
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NCBI_SSL_VERIFY
+        value: "false"
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  # ─── 4. React Dashboard (Static Site — always free) ──────────────────────
   - type: web
     name: amr-sentinel-dashboard
     runtime: static
-    buildCommand: npm --prefix dashboard install && npm --prefix dashboard run build
+    buildCommand: npm --prefix dashboard install --legacy-peer-deps && npm --prefix dashboard run build
     staticPublishPath: dashboard/dist
     headers:
       - path: /*

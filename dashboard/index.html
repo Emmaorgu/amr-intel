@@ -1,13 +1,106 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 
-    <title>dashboard</title>
+    <!-- ── Primary SEO ─────────────────────────────────────────────────── -->
+    <title>AMR-Intel | Autonomous Antimicrobial Resistance Surveillance Platform</title>
+    <meta name="description" content="AMR-Intel is an autonomous pathogen intelligence platform that detects antimicrobial resistance threats 8 months before official surveillance reports. Real-time AMR surveillance across 103 countries, 16,882 genomic signals, and actionable stewardship intelligence for public health authorities, hospitals, and health ministries." />
+    <meta name="keywords" content="antimicrobial resistance surveillance, AMR early warning, pathogen intelligence, antibiotic resistance tracking, AMR detection, WHO GLASS surveillance, ECDC EARS-Net, carbapenem resistance, MRSA surveillance, genomic AMR signals, stewardship intelligence, AMR platform, resistance forecasting, public health surveillance, Africa AMR, Nigeria AMR, global resistance monitoring" />
+    <meta name="author" content="AMR-Intel" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://www.amr-intel.com/" />
+
+    <!-- ── Open Graph (Facebook, LinkedIn, WhatsApp) ────────────────────── -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://www.amr-intel.com/" />
+    <meta property="og:title" content="AMR-Intel | Autonomous Antimicrobial Resistance Surveillance" />
+    <meta property="og:description" content="Early warning infrastructure for antimicrobial resistance. AMR-Intel detects resistance threats 8 months before official surveillance reports — autonomously, across 103 countries." />
+    <meta property="og:image" content="https://www.amr-intel.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="AMR-Intel Global Intelligence Map showing resistance hotspots across 103 countries" />
+    <meta property="og:site_name" content="AMR-Intel" />
+    <meta property="og:locale" content="en_US" />
+
+    <!-- ── Twitter / X Card ─────────────────────────────────────────────── -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@amrintel" />
+    <meta name="twitter:title" content="AMR-Intel | Antimicrobial Resistance Early Warning Platform" />
+    <meta name="twitter:description" content="Autonomous pathogen intelligence. Detects AMR threats 8 months before official reports. 103 countries. 16,882 genomic signals. Real-time stewardship guidance." />
+    <meta name="twitter:image" content="https://www.amr-intel.com/og-image.png" />
+
+    <!-- ── Favicon ───────────────────────────────────────────────────────── -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- ── JSON-LD Structured Data ──────────────────────────────────────── -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://www.amr-intel.com/#organization",
+          "name": "AMR-Intel",
+          "url": "https://www.amr-intel.com",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "https://www.amr-intel.com/logo.png"
+          },
+          "description": "AMR-Intel is an autonomous antimicrobial resistance surveillance platform that detects emerging resistance threats before they become crises.",
+          "foundingDate": "2025",
+          "areaServed": "Worldwide",
+          "knowsAbout": [
+            "Antimicrobial resistance surveillance",
+            "Pathogen intelligence",
+            "Genomic resistance signals",
+            "Public health surveillance",
+            "Stewardship intelligence"
+          ]
+        },
+        {
+          "@type": "WebApplication",
+          "@id": "https://www.amr-intel.com/#webapp",
+          "name": "AMR-Intel Surveillance Platform",
+          "url": "https://www.amr-intel.com",
+          "applicationCategory": "HealthApplication",
+          "operatingSystem": "Web",
+          "description": "Autonomous pathogen intelligence platform providing real-time antimicrobial resistance surveillance, genomic precursor detection, and actionable stewardship guidance across 103 countries.",
+          "featureList": [
+            "Real-time AMR surveillance across 103 countries",
+            "Genomic precursor detection from NCBI NDARO (16,882 signals)",
+            "8-month lead time ahead of official surveillance reports",
+            "AI-generated stewardship intelligence bulletins",
+            "Global intelligence choropleth map",
+            "Emergence radar for early threat identification"
+          ],
+          "provider": {
+            "@id": "https://www.amr-intel.com/#organization"
+          }
+        },
+        {
+          "@type": "WebPage",
+          "@id": "https://www.amr-intel.com/#webpage",
+          "url": "https://www.amr-intel.com",
+          "name": "AMR-Intel | Autonomous Antimicrobial Resistance Surveillance Platform",
+          "description": "Early warning infrastructure for antimicrobial resistance. Detect threats 8 months before official reports.",
+          "isPartOf": { "@id": "https://www.amr-intel.com/#webapp" },
+          "about": {
+            "@type": "MedicalCondition",
+            "name": "Antimicrobial Resistance",
+            "alternateName": "AMR"
+          }
+        }
+      ]
+    }
+    </script>
+
+    <!-- ── Performance hints ─────────────────────────────────────────────── -->
+    <link rel="preconnect" href="https://amr-sentinel-api.onrender.com" />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
   </head>
   <body>
     <div id="root"></div>
