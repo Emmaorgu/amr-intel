@@ -2,23 +2,32 @@ name: AMR-Intel Daily Pipeline
 
 on:
   schedule:
-    # Runs at 02:00 UTC every day
+    # Daily pipeline — 02:00 UTC every day (signal detection + bulletins)
     - cron: "0 2 * * *"
+    # Weekly NDARO ingestion — 01:00 UTC every Sunday (genomic delta pull)
+    - cron: "0 1 * * 0"
   # Allow manual trigger from GitHub Actions tab
   workflow_dispatch:
+    inputs:
+      run_ndaro:
+        description: "Run NDARO genomic ingestion"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 jobs:
   run-pipeline:
     name: Run AMR-Intel Pipeline
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
-      # ── 1. Checkout repo ───────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Set up Python ───────────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -26,12 +35,30 @@ jobs:
           cache: "pip"
           cache-dependency-path: requirements-render.txt
 
-      # ── 3. Install dependencies ────────────────────────────────────────────
       - name: Install dependencies
         run: pip install -r requirements-render.txt
 
-      # ── 4. Run pipeline ────────────────────────────────────────────────────
-      - name: Run daily pipeline
+      # NDARO runs Sundays only OR when manually triggered with run_ndaro=true
+      - name: Run NDARO genomic ingestion
+        if: github.event.schedule == '0 1 * * 0' || github.event.inputs.run_ndaro == 'true'
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: "5432"
+          DB_NAME: amr_sentinel
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          NCBI_SSL_VERIFY: "false"
+        run: |
+          echo "Running NDARO genomic ingestion (weekly delta pull)..."
+          python -m amr_sentinel.ingestion.ndaro_ingestor --taxgroup Staphylococcus_aureus
+          python -m amr_sentinel.ingestion.ndaro_ingestor --taxgroup Klebsiella
+          python -m amr_sentinel.ingestion.ndaro_ingestor --taxgroup Escherichia_coli_Shigella
+          python -m amr_sentinel.ingestion.ndaro_ingestor --taxgroup Acinetobacter
+          python -m amr_sentinel.ingestion.ndaro_ingestor --taxgroup Pseudomonas_aeruginosa
+          python -m amr_sentinel.ingestion.ndaro_ingestor --taxgroup Enterococcus_faecium
+          echo "NDARO ingestion complete."
+
+      - name: Run orchestrator pipeline
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_PORT: "5432"
@@ -40,14 +67,35 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NCBI_SSL_VERIFY: "false"
-          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
-        run: python -m amr_sentinel.scripts.daily_pipeline
+        run: |
+          python -m amr_sentinel.orchestrator --run-once --skip-ingestion
 
-      # ── 5. Report outcome ──────────────────────────────────────────────────
+      - name: Write alerts to DB
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: "5432"
+          DB_NAME: amr_sentinel
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NCBI_SSL_VERIFY: "false"
+        run: python -m amr_sentinel.db.alert_writer
+
+      - name: Backfill structured bulletins
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: "5432"
+          DB_NAME: amr_sentinel
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NCBI_SSL_VERIFY: "false"
+        run: python -m amr_sentinel.scripts.regenerate_bulletins
+
       - name: Pipeline complete
         if: success()
-        run: echo "AMR-Intel daily pipeline completed successfully."
+        run: echo "AMR-Intel pipeline completed successfully."
 
       - name: Pipeline failed
         if: failure()
-        run: echo "AMR-Intel daily pipeline failed. Check logs above."
+        run: echo "AMR-Intel pipeline failed. Check logs above."
