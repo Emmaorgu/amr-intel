@@ -11,7 +11,9 @@
  *   6. Executive Brief
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { geoNaturalEarth1, geoPath } from "d3-geo";
+import { feature } from "topojson-client";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -363,73 +365,83 @@ function Sidebar({ screen, setScreen, stats, genomicCount }) {
 }
 
 
-// ─── Global Intelligence Map ──────────────────────────────────────────────────
-function GlobalIntelMap({ alerts, onInvestigate, setScreen }) {
-  const [layer,    setLayer]    = useState("alerts");   // alerts | genomic | heatmap
-  const [selected, setSelected] = useState(null);       // selected country ISO3
-  const [hovered,  setHovered]  = useState(null);
+// ─── Global Intelligence Map (Choropleth — d3-geo) ───────────────────────────
+const TOPO_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
-  // Country coordinate map — SVG viewBox 0 0 900 440
-  const COORDS = {
-    // Europe
-    BGR:{x:555,y:178},HRV:{x:524,y:170},CYP:{x:578,y:196},ROU:{x:558,y:168},
-    GRC:{x:542,y:192},SVK:{x:534,y:162},POL:{x:532,y:150},CZE:{x:523,y:158},
-    ITA:{x:520,y:182},LTU:{x:544,y:140},LVA:{x:544,y:132},HUN:{x:536,y:166},
-    DEU:{x:514,y:150},FRA:{x:504,y:168},ESP:{x:494,y:182},SWE:{x:530,y:128},
-    NOR:{x:518,y:118},FIN:{x:548,y:116},DNK:{x:514,y:136},LUX:{x:508,y:158},
-    MLT:{x:528,y:200},ISL:{x:468,y:116},GBR:{x:492,y:144},NLD:{x:506,y:146},
-    BEL:{x:504,y:154},AUT:{x:526,y:164},CHE:{x:512,y:166},PRT:{x:486,y:180},
-    EST:{x:548,y:126},SVN:{x:524,y:168},
-    // Africa
-    NGA:{x:516,y:238},GHA:{x:500,y:242},CMR:{x:528,y:238},KEN:{x:560,y:252},
-    EGY:{x:556,y:206},MAR:{x:490,y:200},ZAF:{x:536,y:296},CIV:{x:498,y:246},
-    SEN:{x:482,y:236},ZMB:{x:548,y:272},MWI:{x:556,y:272},MOZ:{x:556,y:282},
-    OMN:{x:590,y:218},BHR:{x:584,y:212},
-    // Middle East / South Asia
-    SAU:{x:574,y:214},TUR:{x:562,y:184},UKR:{x:554,y:158},
-    IND:{x:626,y:226},BGD:{x:640,y:216},PAK:{x:614,y:206},
-    IRN:{x:592,y:198},LBN:{x:566,y:194},
-    // East / SE Asia
-    CHN:{x:674,y:188},JPN:{x:728,y:176},KOR:{x:716,y:182},
-    THA:{x:660,y:234},IDN:{x:690,y:262},PHL:{x:712,y:238},
-    VNM:{x:672,y:234},MYS:{x:678,y:252},SGP:{x:682,y:258},
-    MMR:{x:652,y:216},LAO:{x:666,y:222},
-    // Americas
-    USA:{x:170,y:178},BRA:{x:262,y:270},MEX:{x:138,y:210},
-    ARG:{x:240,y:320},COL:{x:218,y:256},PER:{x:218,y:278},
-    CHL:{x:228,y:308},BTN:{x:644,y:204},NAM:{x:522,y:288},
-    // Oceania
-    AUS:{x:734,y:308},NZL:{x:782,y:344},
-    // Central Asia
-    MLI:{x:498,y:220},MWI:{x:556,y:272},
-  };
+const NUM_TO_ISO3 = {
+  "4":"AFG","8":"ALB","12":"DZA","24":"AGO","32":"ARG","36":"AUS","40":"AUT",
+  "50":"BGD","56":"BEL","68":"BOL","76":"BRA","100":"BGR","116":"KHM","120":"CMR",
+  "124":"CAN","152":"CHL","156":"CHN","170":"COL","191":"HRV","196":"CYP","203":"CZE",
+  "208":"DNK","218":"ECU","818":"EGY","231":"ETH","246":"FIN","250":"FRA","276":"DEU",
+  "288":"GHA","300":"GRC","320":"GTM","332":"HTI","348":"HUN","356":"IND","360":"IDN",
+  "364":"IRN","368":"IRQ","372":"IRL","376":"ISR","380":"ITA","392":"JPN","400":"JOR",
+  "404":"KEN","410":"KOR","414":"KWT","418":"LAO","422":"LBN","430":"LBR","434":"LBY",
+  "440":"LTU","442":"LUX","450":"MDG","454":"MWI","458":"MYS","484":"MEX","504":"MAR",
+  "516":"NAM","524":"NPL","528":"NLD","554":"NZL","566":"NGA","578":"NOR","586":"PAK",
+  "604":"PER","608":"PHL","616":"POL","620":"PRT","642":"ROU","643":"RUS","682":"SAU",
+  "686":"SEN","703":"SVK","710":"ZAF","724":"ESP","752":"SWE","756":"CHE","760":"SYR",
+  "764":"THA","788":"TUN","792":"TUR","800":"UGA","804":"UKR","784":"ARE","826":"GBR",
+  "840":"USA","858":"URY","862":"VEN","704":"VNM","887":"YEM","894":"ZMB","716":"ZWE",
+  "31":"AZE","51":"ARM","268":"GEO","398":"KAZ","417":"KGZ","762":"TJK","795":"TKM",
+  "860":"UZB","112":"BLR","498":"MDA","70":"BIH","807":"MKD","688":"SRB","499":"MNE",
+  "8":"ALB","440":"LTU","233":"EST","428":"LVA","470":"MLT","352":"ISL","705":"SVN",
+  "508":"MOZ","72":"BWA","426":"LSO","748":"SWZ","140":"CAF","148":"TCD","178":"COG",
+  "180":"COD","204":"BEN","854":"BFA","562":"NER","768":"TGO","104":"MMR","48":"BHR",
+  "512":"OMN","214":"DOM","320":"GTM","340":"HND","388":"JAM","558":"NIC","600":"PRY",
+  "630":"PRI","218":"ECU","466":"MLI","478":"MRT","232":"ERI","262":"DJI","174":"COM",
+  "266":"GAB","324":"GIN","624":"GNB","384":"CIV","64":"BTN","144":"LKA","270":"GMB",
+};
 
-  // Build per-country intelligence summary from alerts
+function GlobalIntelMap({ alerts, onInvestigate }) {
+  var [layer,     setLayer]     = useState("alerts");
+  var [selected,  setSelected]  = useState(null);
+  var [hovered,   setHovered]   = useState(null);
+  var [geoData,   setGeoData]   = useState(null);
+  var [paths,     setPaths]     = useState([]);
+  var svgRef = useRef(null);
+
+  var W = 960, H = 500;
+
+  // Load TopoJSON once
+  useEffect(function() {
+    fetch(TOPO_URL)
+      .then(function(r){ return r.json(); })
+      .then(function(topo) {
+        var countries = feature(topo, topo.objects.countries);
+        var projection = geoNaturalEarth1().scale(165).translate([W/2, H/2 + 25]);
+        var pathGen = geoPath().projection(projection);
+        var built = countries.features.map(function(geo) {
+          var d = pathGen(geo);
+          var numId = String(geo.id || "");
+          var iso3 = NUM_TO_ISO3[numId] || null;
+          return { d: d, iso3: iso3, id: geo.id };
+        }).filter(function(p){ return p.d; });
+        setPaths(built);
+        setGeoData(countries);
+      })
+      .catch(function(e){ console.error("TopoJSON load failed", e); });
+  }, []);
+
+  // Build per-country data from alerts
   var countryData = {};
   alerts.forEach(function(a) {
     var iso = a.country_iso3;
     if (!iso) return;
     if (!countryData[iso]) {
       countryData[iso] = {
-        iso3: iso,
-        alerts: [],
-        maxScore: 0,
-        topTier: "monitor",
-        hasGenomic: false,
-        isNew: false,
-        resistanceRates: [],
+        iso3: iso, alerts: [], maxScore: 0, topTier: "monitor",
+        hasGenomic: false, isNew: false, resistanceRates: [],
       };
     }
     var cd = countryData[iso];
     cd.alerts.push(a);
     if ((a.severity_score || 0) > cd.maxScore) {
       cd.maxScore = a.severity_score || 0;
-      cd.topTier = a.severity_tier || "monitor";
+      cd.topTier  = a.severity_tier || "monitor";
     }
     if (a.signal_type === "genomic_precursor") cd.hasGenomic = true;
-    // Mark as new if detected within last 7 days
     if (a.created_at) {
-      var age = (Date.now() - new Date(a.created_at).getTime()) / (1000 * 60 * 60 * 24);
+      var age = (Date.now() - new Date(a.created_at).getTime()) / 86400000;
       if (age < 7) cd.isNew = true;
     }
     if (a.signal_type !== "genomic_precursor" && a.current_resistance) {
@@ -437,119 +449,65 @@ function GlobalIntelMap({ alerts, onInvestigate, setScreen }) {
     }
   });
 
-  // Get selected country detail
-  var selData = selected ? countryData[selected] : null;
-  var selAlerts = selData ? selData.alerts.filter(function(a){ return a.signal_type !== "genomic_precursor"; }).sort(function(a,b){ return (b.severity_score||0)-(a.severity_score||0); }) : [];
-  var selGenomic = selData ? selData.alerts.filter(function(a){ return a.signal_type === "genomic_precursor"; }) : [];
+  function getFill(iso3) {
+    if (!iso3) return "#0C1828";
+    var cd = countryData[iso3];
+    if (!cd) return "#0C1828";
+    if (layer === "heatmap") {
+      var rates = cd.resistanceRates;
+      if (!rates.length) return "#0C1828";
+      var avg = rates.reduce(function(a,b){return a+b;},0) / rates.length;
+      if (avg >= 0.6) return "#991B1B";
+      if (avg >= 0.4) return "#B45309";
+      if (avg >= 0.2) return "#1D4ED8";
+      return "#1E3A5F";
+    }
+    if (layer === "genomic") {
+      if (!cd.hasGenomic && !cd.resistanceRates.length) return "#0C1828";
+      if (cd.hasGenomic && cd.resistanceRates.length) return "#78350F";
+      if (cd.hasGenomic) return "#1E3A5F";
+      return "#0C1828";
+    }
+    // alerts layer
+    var s = cd.maxScore;
+    var t = cd.topTier;
+    if (t === "critical") return s >= 98 ? "#991B1B" : s >= 90 ? "#B91C1C" : "#DC2626";
+    if (t === "warn")     return s >= 90 ? "#92400E" : "#B45309";
+    return "#1E3A5F";
+  }
 
-  // Layer button style helper
+  function getStroke(iso3) {
+    if (selected === iso3) return "#F1F5F9";
+    if (hovered  === iso3) return "#94A3B8";
+    if (iso3 && countryData[iso3]) return "#1E2D3D";
+    return "#111827";
+  }
+
+  function getStrokeW(iso3) {
+    if (selected === iso3) return 1.5;
+    if (hovered  === iso3) return 0.8;
+    return 0.3;
+  }
+
+  var selData    = selected ? countryData[selected] : null;
+  var selAlerts  = selData ? selData.alerts.filter(function(a){return a.signal_type!=="genomic_precursor";}).sort(function(a,b){return (b.severity_score||0)-(a.severity_score||0);}) : [];
+  var selGenomic = selData ? selData.alerts.filter(function(a){return a.signal_type==="genomic_precursor";}) : [];
+
   function layerBtn(id, label) {
     var active = layer === id;
     return (
-      <button key={id} onClick={function(){ setLayer(id); setSelected(null); }} style={{
+      <button key={id} onClick={function(){setLayer(id);setSelected(null);}} style={{
         background: active ? C.accent : "transparent",
         border: "1px solid " + (active ? C.accent : C.border),
         color: active ? C.white : C.muted,
-        borderRadius: 4, padding: "3px 10px", fontSize: 10, cursor: "pointer",
-        fontWeight: active ? 600 : 400, letterSpacing: ".04em",
+        borderRadius:4, padding:"3px 10px", fontSize:10,
+        cursor:"pointer", fontWeight: active ? 600 : 400,
       }}>{label}</button>
     );
   }
 
-  // Render a single marker
-  function renderMarker(iso3, cd, i) {
-    if (!COORDS[iso3]) return null;
-    var pos = COORDS[iso3];
-    var isSelected = selected === iso3;
-    var isHov = hovered === iso3;
-
-    // Layer: genomic only — show blue ring markers
-    if (layer === "genomic") {
-      if (!cd.hasGenomic && cd.alerts.every(function(a){ return a.signal_type !== "genomic_precursor"; })) return null;
-      var hasPhenotypic = cd.resistanceRates.length > 0;
-      var gColor = hasPhenotypic ? "#F59E0B" : "#3B82F6";
-      var label = hasPhenotypic ? "Gene+Pheno" : "Gene only";
-      return (
-        <g key={iso3} style={{cursor:"pointer"}} onClick={function(){ setSelected(isSelected ? null : iso3); }}
-          onMouseEnter={function(){ setHovered(iso3); }} onMouseLeave={function(){ setHovered(null); }}>
-          <circle cx={pos.x} cy={pos.y} r={isSelected||isHov?10:7} fill="transparent" stroke={gColor} strokeWidth={isSelected?2.5:1.5} opacity=".9"/>
-          <circle cx={pos.x} cy={pos.y} r={3} fill={gColor} opacity=".7"/>
-          {(isHov || isSelected) && (
-            <text x={pos.x+12} y={pos.y+4} fill={gColor} fontSize="8" fontWeight="600">{iso3}</text>
-          )}
-        </g>
-      );
-    }
-
-    // Layer: heatmap — filled squares by resistance rate
-    if (layer === "heatmap") {
-      var avgRate = cd.resistanceRates.length > 0
-        ? cd.resistanceRates.reduce(function(a,b){ return a+b; }, 0) / cd.resistanceRates.length
-        : 0;
-      if (avgRate === 0) return null;
-      var hColor = avgRate >= 0.6 ? "#EF4444" : avgRate >= 0.4 ? "#F59E0B" : avgRate >= 0.2 ? "#3B82F6" : "#1E3A5F";
-      var sz = isSelected || isHov ? 9 : 7;
-      return (
-        <g key={iso3} style={{cursor:"pointer"}} onClick={function(){ setSelected(isSelected ? null : iso3); }}
-          onMouseEnter={function(){ setHovered(iso3); }} onMouseLeave={function(){ setHovered(null); }}>
-          <rect x={pos.x-sz/2} y={pos.y-sz/2} width={sz} height={sz} fill={hColor} opacity=".85" rx="1"/>
-          {(isHov || isSelected) && (
-            <text x={pos.x+8} y={pos.y+4} fill={hColor} fontSize="8" fontWeight="600">{iso3} {(avgRate*100).toFixed(0)+"%"}</text>
-          )}
-        </g>
-      );
-    }
-
-    // Layer: alerts (default) — sized/colored circles
-    var score = cd.maxScore;
-    var tier = cd.topTier;
-    var color = tier === "critical" ? "#EF4444" : tier === "warn" ? "#F59E0B" : "#3B82F6";
-    // Size = score magnitude
-    var r = score >= 98 ? 9 : score >= 90 ? 7 : score >= 80 ? 5.5 : 4;
-    if (isSelected) r = r + 2;
-    // New alert = pulse animation
-    var dur = (1.8 + i * 0.15) + "s";
-    var shouldPulse = cd.isNew;
-    // Genomic ring
-    var showRing = cd.hasGenomic && tier !== "critical";
-
-    return (
-      <g key={iso3} style={{cursor:"pointer"}}
-        onClick={function(){ setSelected(isSelected ? null : iso3); }}
-        onMouseEnter={function(){ setHovered(iso3); }}
-        onMouseLeave={function(){ setHovered(null); }}>
-        {/* Glow */}
-        <circle cx={pos.x} cy={pos.y} r={r * 2.4} fill={color} opacity={isSelected ? ".18" : ".09"}/>
-        {/* Genomic precursor ring */}
-        {showRing && (
-          <circle cx={pos.x} cy={pos.y} r={r + 4} fill="transparent" stroke="#3B82F6" strokeWidth="1.2" opacity=".7" strokeDasharray="3 2"/>
-        )}
-        {/* Main dot */}
-        {shouldPulse ? (
-          <circle cx={pos.x} cy={pos.y} r={r} fill={color} opacity=".95">
-            <animate attributeName="r" values={r + ";" + Math.round(r*1.6) + ";" + r} dur={dur} repeatCount="indefinite"/>
-            <animate attributeName="opacity" values=".95;.3;.95" dur={dur} repeatCount="indefinite"/>
-          </circle>
-        ) : (
-          <circle cx={pos.x} cy={pos.y} r={r} fill={color} opacity={isSelected ? "1" : ".9"}/>
-        )}
-        {/* Selected highlight ring */}
-        {isSelected && (
-          <circle cx={pos.x} cy={pos.y} r={r + 3} fill="transparent" stroke={color} strokeWidth="1.5" opacity=".8"/>
-        )}
-        {/* Hover label */}
-        {(isHov && !isSelected) && (
-          <text x={pos.x + r + 4} y={pos.y + 4} fill={color} fontSize="8" fontWeight="600">{iso3}</text>
-        )}
-      </g>
-    );
-  }
-
-  var dots = Object.entries(countryData);
-
   return (
     <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16,flex:1}}>
-      {/* Header */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
         <SectionTitle>Global Intelligence Map</SectionTitle>
         <div style={{display:"flex",gap:4}}>
@@ -559,116 +517,117 @@ function GlobalIntelMap({ alerts, onInvestigate, setScreen }) {
         </div>
       </div>
 
-      {/* Map + side panel */}
       <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-        {/* SVG Map */}
-        <div style={{flex:1,background:"linear-gradient(160deg,#080F1C,#0A1220)",borderRadius:6,position:"relative",overflow:"hidden",border:"1px solid " + C.border,minHeight:200}}>
-          <svg viewBox="0 0 900 440" style={{width:"100%",height:"100%",display:"block"}} preserveAspectRatio="xMidYMid meet">
+        {/* SVG choropleth */}
+        <div style={{flex:1,background:"#080F1C",borderRadius:6,overflow:"hidden",border:"1px solid " + C.border,position:"relative",minHeight:340}}>
+          <svg ref={svgRef} viewBox={"0 0 " + W + " " + H} style={{width:"100%",height:"100%",display:"block",minHeight:340}}
+            preserveAspectRatio="xMidYMid meet">
             <defs>
-              <radialGradient id="mapGlow" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="#0D2040" stopOpacity=".6"/>
+              <radialGradient id="bgGrad" cx="50%" cy="50%" r="70%">
+                <stop offset="0%" stopColor="#0D1F38" stopOpacity="1"/>
                 <stop offset="100%" stopColor="#050B14" stopOpacity="1"/>
               </radialGradient>
             </defs>
-            <rect width="900" height="440" fill="url(#mapGlow)"/>
-            {/* Continent blobs — simplified but recognisable */}
-            {/* North America */}
-            <path d="M52,72 L98,64 L138,66 L170,70 L196,80 L214,100 L224,126 L220,158 L208,184 L192,208 L172,220 L148,218 L126,224 L106,220 L86,204 L66,178 L54,148 L48,118 L48,92 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
-            {/* South America */}
-            <path d="M182,230 L220,222 L252,224 L278,228 L294,246 L298,268 L292,296 L278,318 L258,334 L236,336 L214,322 L198,300 L190,274 L184,248 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
-            {/* Europe */}
-            <path d="M456,96 L490,90 L524,88 L554,90 L576,104 L582,124 L576,148 L560,168 L538,180 L514,182 L490,176 L468,162 L456,144 L450,120 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
-            {/* Africa */}
-            <path d="M466,182 L504,176 L538,178 L564,186 L580,204 L582,232 L576,262 L562,290 L544,308 L520,312 L496,306 L474,290 L458,266 L452,238 L452,210 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
-            {/* Asia (mainland) */}
-            <path d="M554,76 L614,70 L672,68 L728,72 L772,82 L796,100 L800,124 L794,152 L776,174 L748,192 L714,206 L676,212 L640,208 L606,198 L574,182 L556,162 L548,136 L550,108 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
-            {/* SE Asia / Indonesia */}
-            <path d="M656,230 L694,226 L730,228 L756,240 L762,260 L752,278 L730,286 L704,282 L680,268 L662,250 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
-            {/* Australia */}
-            <path d="M696,290 L738,284 L774,288 L800,304 L806,328 L796,352 L770,364 L738,360 L710,344 L698,320 L696,304 Z" fill="#0E1F35" stroke="#152840" strokeWidth=".5"/>
-            {/* Graticule lines (subtle) */}
-            <line x1="0" y1="220" x2="900" y2="220" stroke="#0D1E30" strokeWidth=".4"/>
-            <line x1="450" y1="0" x2="450" y2="440" stroke="#0D1E30" strokeWidth=".4"/>
-            {/* Markers */}
-            {dots.map(function([iso3, cd], i) { return renderMarker(iso3, cd, i); })}
+            <rect width={W} height={H} fill="url(#bgGrad)"/>
+
+            {/* Subtle graticule lines */}
+            <line x1="0" y1={H/2} x2={W} y2={H/2} stroke="#0D1E30" strokeWidth="0.5"/>
+            <line x1={W/2} y1="0" x2={W/2} y2={H} stroke="#0D1E30" strokeWidth="0.5"/>
+
+            {!geoData && (
+              <text x={W/2} y={H/2} fill="#64748B" fontSize="12" textAnchor="middle">Loading map…</text>
+            )}
+
+            {paths.map(function(p, i) {
+              var fill   = getFill(p.iso3);
+              var stroke = getStroke(p.iso3);
+              var sw     = getStrokeW(p.iso3);
+              var hasCd  = p.iso3 && countryData[p.iso3];
+              return (
+                <path
+                  key={i}
+                  d={p.d}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={sw}
+                  style={{cursor: hasCd ? "pointer" : "default", transition:"fill .12s"}}
+                  onMouseEnter={function(){ if(hasCd) setHovered(p.iso3); }}
+                  onMouseLeave={function(){ setHovered(null); }}
+                  onClick={function(){ if(hasCd) setSelected(selected===p.iso3?null:p.iso3); }}
+                />
+              );
+            })}
+
+            {/* Selected country highlight ring */}
+            {selected && paths.filter(function(p){return p.iso3===selected;}).map(function(p,i){
+              return <path key={"sel"+i} d={p.d} fill="none" stroke="#F1F5F9" strokeWidth="1.5" opacity=".6" style={{pointerEvents:"none"}}/>;
+            })}
+
+            {/* Hover tooltip */}
+            {hovered && hovered !== selected && (function(){
+              var cd = countryData[hovered];
+              if (!cd) return null;
+              var p = paths.find(function(x){return x.iso3===hovered;});
+              if (!p) return null;
+              return (
+                <g style={{pointerEvents:"none"}}>
+                  <text x={W/2} y={H - 14} fill="#94A3B8" fontSize="9" textAnchor="middle" fontWeight="600">
+                    {countryName(hovered) + " — Score " + cd.maxScore + " — " + cd.alerts.filter(function(a){return a.signal_type!=="genomic_precursor";}).length + " alert(s)"}
+                  </text>
+                </g>
+              );
+            })()}
           </svg>
 
           {/* Legend */}
-          <div style={{position:"absolute",bottom:6,left:8,display:"flex",gap:10,fontSize:8,color:"#64748B",background:"rgba(8,15,28,.75)",padding:"4px 8px",borderRadius:4,backdropFilter:"blur(4px)"}}>
-            {layer === "alerts" && [
-              ["Critical","#EF4444"],["High","#F59E0B"],["Watch","#3B82F6"],["Genomic ring","#3B82F6"],
-            ].map(function(item) {
-              return (
-                <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}>
-                  {item[0] === "Genomic ring"
-                    ? <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="none" stroke={item[1]} strokeWidth="1.2" strokeDasharray="2 1"/></svg>
-                    : <div style={{width:7,height:7,borderRadius:"50%",background:item[1]}}/>
-                  }
-                  {item[0]}
-                </div>
-              );
+          <div style={{position:"absolute",bottom:6,left:8,display:"flex",gap:10,fontSize:8,color:"#64748B",background:"rgba(5,11,20,.85)",padding:"4px 10px",borderRadius:4}}>
+            {layer==="alerts" && [["No data","#0C1828"],["Watch","#1E3A5F"],["High","#B45309"],["Critical","#991B1B"]].map(function(item){
+              return <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}><div style={{width:11,height:8,background:item[1],borderRadius:1}}/>{item[0]}</div>;
             })}
-            {layer === "genomic" && [["Gene only","#3B82F6"],["Gene+Pheno","#F59E0B"]].map(function(item) {
-              return (
-                <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}>
-                  <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="none" stroke={item[1]} strokeWidth="1.2"/></svg>
-                  {item[0]}
-                </div>
-              );
+            {layer==="genomic" && [["No data","#0C1828"],["Gene only","#1E3A5F"],["Gene+Pheno","#78350F"]].map(function(item){
+              return <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}><div style={{width:11,height:8,background:item[1],borderRadius:1}}/>{item[0]}</div>;
             })}
-            {layer === "heatmap" && [["<20%","#1E3A5F"],["20-40%","#3B82F6"],["40-60%","#F59E0B"],[">60%","#EF4444"]].map(function(item) {
-              return (
-                <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}>
-                  <div style={{width:7,height:7,borderRadius:1,background:item[1]}}/>
-                  {item[0]}
-                </div>
-              );
+            {layer==="heatmap" && [["No data","#0C1828"],["Low","#1E3A5F"],["Med","#1D4ED8"],["High","#B45309"],["Critical","#991B1B"]].map(function(item){
+              return <div key={item[0]} style={{display:"flex",alignItems:"center",gap:3}}><div style={{width:11,height:8,background:item[1],borderRadius:1}}/>{item[0]}</div>;
             })}
           </div>
 
-          {/* New alert pulse indicator */}
-          {layer === "alerts" && dots.some(function(e){ return e[1].isNew; }) && (
-            <div style={{position:"absolute",top:6,right:8,display:"flex",alignItems:"center",gap:4,fontSize:8,color:C.green,background:"rgba(8,15,28,.75)",padding:"3px 6px",borderRadius:3}}>
-              <div style={{width:5,height:5,borderRadius:"50%",background:C.green,animation:"pulse 1.5s infinite"}}/>
-              Pulsing = new (&lt;7 days)
+          {/* Click hint */}
+          {!selected && (
+            <div style={{position:"absolute",top:6,right:8,fontSize:8,color:C.muted,background:"rgba(5,11,20,.75)",padding:"3px 7px",borderRadius:3}}>
+              Click a country to investigate
             </div>
           )}
         </div>
 
-        {/* Country side panel — shown when a country is selected */}
+        {/* Country side panel */}
         {selData && (
-          <div style={{width:170,flexShrink:0,background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6,padding:12,fontSize:11}}>
+          <div style={{width:172,flexShrink:0,background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6,padding:12,fontSize:11}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div style={{fontWeight:700,color:C.white,fontSize:12}}>{countryName(selData.iso3)}</div>
-              <button onClick={function(){ setSelected(null); }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,lineHeight:1}}>×</button>
+              <button onClick={function(){setSelected(null);}} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>×</button>
             </div>
-
-            {/* Score + tier */}
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
               <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:22,fontWeight:800,color:selData.topTier==="critical"?C.red:C.amber}}>{selData.maxScore}</div>
-              <div style={{fontSize:9,padding:"2px 5px",borderRadius:3,background:selData.topTier==="critical"?C.redDim:C.amberDim,color:selData.topTier==="critical"?C.red:C.amber,fontWeight:700,letterSpacing:".06em"}}>{(TIER_LABEL[selData.topTier]||"WATCH")}</div>
+              <div style={{fontSize:9,padding:"2px 5px",borderRadius:3,background:selData.topTier==="critical"?C.redDim:C.amberDim,color:selData.topTier==="critical"?C.red:C.amber,fontWeight:700,letterSpacing:".06em"}}>{TIER_LABEL[selData.topTier]||"WATCH"}</div>
             </div>
-
-            {/* Stats row */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
               <div style={{background:C.surface,borderRadius:4,padding:"5px 7px"}}>
                 <div style={{fontSize:8,color:C.muted,marginBottom:2}}>ALERTS</div>
-                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:14,fontWeight:700,color:C.white}}>{selData.alerts.filter(function(a){ return a.signal_type!=="genomic_precursor"; }).length}</div>
+                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:14,fontWeight:700,color:C.white}}>{selAlerts.length}</div>
               </div>
               <div style={{background:C.surface,borderRadius:4,padding:"5px 7px"}}>
                 <div style={{fontSize:8,color:C.muted,marginBottom:2}}>GENES</div>
                 <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:14,fontWeight:700,color:C.blue}}>{selGenomic.length}</div>
               </div>
             </div>
-
-            {/* Top pathogens */}
             {selAlerts.length > 0 && (
               <div style={{marginBottom:8}}>
                 <div style={{fontSize:8,color:C.muted,fontWeight:600,letterSpacing:".06em",marginBottom:4}}>TOP PATHOGENS</div>
-                {selAlerts.slice(0,3).map(function(a, i) {
+                {selAlerts.slice(0,3).map(function(a,i){
                   return (
-                    <div key={i} style={{fontSize:10,color:C.mutedHigh,marginBottom:2,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}
-                      onClick={function(){ onInvestigate && onInvestigate(a); }}>
+                    <div key={i} style={{fontSize:10,color:C.mutedHigh,marginBottom:3,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}
+                      onClick={function(){onInvestigate&&onInvestigate(a);}}>
                       <div style={{width:5,height:5,borderRadius:"50%",background:TIER_COLOR[a.severity_tier]||C.blue,flexShrink:0}}/>
                       <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                         {(a.pathogen_name||"").replace("Klebsiella pneumoniae","K. pneu.").replace("Staphylococcus aureus","S. aureus").replace("Escherichia coli","E. coli").replace("Enterococcus faecium","E. faecium").replace("Pseudomonas aeruginosa","P. aerug.").replace("Acinetobacter spp.","Acinetobacter")}
@@ -678,20 +637,14 @@ function GlobalIntelMap({ alerts, onInvestigate, setScreen }) {
                 })}
               </div>
             )}
-
-            {/* Genomic genes */}
             {selGenomic.length > 0 && (
               <div style={{marginBottom:8}}>
                 <div style={{fontSize:8,color:C.muted,fontWeight:600,letterSpacing:".06em",marginBottom:4}}>DETECTED GENES</div>
-                {[...new Set(selGenomic.map(function(a){ return a.gene_name; }).filter(Boolean))].slice(0,4).map(function(g, i) {
-                  return (
-                    <div key={i} style={{fontSize:9,color:C.blue,marginBottom:1,fontFamily:"JetBrains Mono,monospace"}}>• {g}</div>
-                  );
+                {[...new Set(selGenomic.map(function(a){return a.gene_name;}).filter(Boolean))].slice(0,4).map(function(g,i){
+                  return <div key={i} style={{fontSize:9,color:C.blue,marginBottom:1,fontFamily:"JetBrains Mono,monospace"}}>{"• " + g}</div>;
                 })}
               </div>
             )}
-
-            {/* Trend */}
             {selAlerts.length > 0 && (
               <div style={{marginBottom:8}}>
                 <div style={{fontSize:8,color:C.muted,fontWeight:600,letterSpacing:".06em",marginBottom:3}}>TREND</div>
@@ -700,13 +653,18 @@ function GlobalIntelMap({ alerts, onInvestigate, setScreen }) {
                 </div>
               </div>
             )}
-
-            {/* Investigate CTA */}
+            {selData.resistanceRates.length > 0 && (
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:8,color:C.muted,fontWeight:600,letterSpacing:".06em",marginBottom:3}}>AVG RESISTANCE</div>
+                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:13,fontWeight:700,color:C.red}}>
+                  {(selData.resistanceRates.reduce(function(a,b){return a+b;},0)/selData.resistanceRates.length*100).toFixed(1)+"%"}
+                </div>
+              </div>
+            )}
             {selAlerts.length > 0 && (
-              <button onClick={function(){ onInvestigate && onInvestigate(selAlerts[0]); }} style={{
+              <button onClick={function(){onInvestigate&&onInvestigate(selAlerts[0]);}} style={{
                 width:"100%",background:C.accent,border:"none",color:C.white,
-                borderRadius:4,padding:"5px 8px",fontSize:10,cursor:"pointer",fontWeight:600,
-                marginTop:2,
+                borderRadius:4,padding:"6px 8px",fontSize:10,cursor:"pointer",fontWeight:600,marginTop:2,
               }}>Investigate →</button>
             )}
           </div>
@@ -756,7 +714,7 @@ function CommandCenter({ onInvestigate, setScreen }) {
         <StatCard label="System Uptime" value="99.8%" sub="last 30 days" accent={C.green}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr 1fr",gap:16,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 2fr 1fr",gap:16,marginBottom:16,alignItems:"start"}}>
         <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:18}}>
           <SectionTitle action={{label:"View all",fn:()=>setScreen&&setScreen("emergence")}}>Emergence Radar</SectionTitle>
           <div style={{fontSize:10,color:C.muted,marginBottom:12}}>Top countries at risk</div>
@@ -777,8 +735,10 @@ function CommandCenter({ onInvestigate, setScreen }) {
         </div>
 
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
-          {/* ── Global Intelligence Map (Level 1+2) ── */}
-          <GlobalIntelMap alerts={alerts} onInvestigate={onInvestigate} setScreen={setScreen}/>
+          {/* ── Global Intelligence Map ── */}
+          <div style={{flex:1,display:"flex",flexDirection:"column"}}>
+            <GlobalIntelMap alerts={alerts} onInvestigate={onInvestigate} setScreen={setScreen}/>
+          </div>
 
           <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16}}>
             <div style={{display:"flex",gap:0}}>
