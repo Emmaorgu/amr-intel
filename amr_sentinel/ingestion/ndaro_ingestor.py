@@ -69,6 +69,10 @@ import re
 import ssl
 import time
 import urllib.request
+
+import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -264,80 +268,127 @@ def match_priority_gene(element_symbol: str) -> Optional[tuple[str, dict]]:
 
 
 # ---------------------------------------------------------------------------
-# FTP downloader
+# HTTPS downloader (replaces FTP — more reliable for large files)
+# NCBI exposes the same FTP tree via HTTPS at https://ftp.ncbi.nlm.nih.gov/
 # ---------------------------------------------------------------------------
 
-def _resolve_latest_version(ftp: ftplib.FTP, taxgroup: str) -> Optional[str]:
+NCBI_HTTPS_BASE = "https://ftp.ncbi.nlm.nih.gov/pathogen/Results"
+
+
+def _resolve_latest_version_https(taxgroup: str) -> Optional[str]:
     """
-    Resolve the latest_snps symlink to get the actual versioned directory name.
-    FTP symlinks are listed as: "latest_snps -> PDG000000012.2449"
+    Resolve the latest_snps symlink via HTTPS directory listing.
+
+    NCBI exposes FTP directory listings as HTML at https://ftp.ncbi.nlm.nih.gov/
+    We fetch the directory listing and parse the versioned directory name.
 
     Args:
-        ftp: Connected FTP instance
-        taxgroup: Taxgroup name
+        taxgroup: Taxgroup name e.g. "Klebsiella"
 
     Returns:
         Resolved version string e.g. "PDG000000012.2449", or None on failure
     """
+    import re as _re
+    url = f"{NCBI_HTTPS_BASE}/{taxgroup}/"
     try:
-        lines = []
-        ftp.retrlines(f"LIST {NCBI_FTP_BASE}/{taxgroup}/", lines.append)
-        for line in lines:
-            # Match symlink entries: "... latest_snps -> PDG000000012.2449"
-            if "latest_snps" in line and "->" in line:
-                version = line.split("->")[-1].strip()
-                logger.info("Resolved latest_snps -> %s for %s", version, taxgroup)
-                return version
-        logger.error("Could not find latest_snps symlink for %s", taxgroup)
-        return None
-    except ftplib.all_errors as exc:
-        logger.error("Failed to resolve latest version for %s: %s", taxgroup, exc)
+        resp = requests.get(url, timeout=30, verify=False)
+        resp.raise_for_status()
+        # Parse directory listing — look for PDG\d+\.\d+ versioned dirs
+        versions = _re.findall(r'PDG\d+\.\d+', resp.text)
+        if not versions:
+            logger.error("Could not find versioned directory for %s", taxgroup)
+            return None
+        # Return the highest version (last when sorted)
+        version = sorted(set(versions))[-1]
+        logger.info("Resolved latest_snps -> %s for %s", version, taxgroup)
+        return version
+    except Exception as exc:
+        logger.error("Failed to resolve version via HTTPS for %s: %s", taxgroup, exc)
         return None
 
 
 def download_amr_metadata(taxgroup: str) -> Optional[io.StringIO]:
     """
-    Download and decompress the AMR metadata TSV for a taxgroup from NCBI FTP.
+    Download the AMR metadata TSV for a taxgroup via HTTPS with chunked streaming.
 
-    Resolves the latest_snps symlink to the actual versioned directory, then
-    downloads: /pathogen/Results/{taxgroup}/{version}/Metadata/{taxgroup}.amr.metadata.tsv.gz
+    Uses HTTPS instead of FTP for reliability — NCBI FTP times out on large
+    files (E. coli ~400MB) after ~69 seconds. HTTPS streaming handles large
+    files correctly with no timeout issues.
+
+    Resolves the versioned directory, then downloads:
+        https://ftp.ncbi.nlm.nih.gov/pathogen/Results/{taxgroup}/{version}/AMR/{version}.amr.metadata.tsv
 
     Args:
         taxgroup: NCBI taxgroup name e.g. "Klebsiella"
 
     Returns:
-        StringIO of the decompressed TSV content, or None on failure
+        StringIO of the TSV content, or None on failure
     """
-    try:
-        ftp = ftplib.FTP(NCBI_FTP_HOST, timeout=120)
-        ftp.login()
-
-        # Resolve symlink to get actual versioned directory
-        version = _resolve_latest_version(ftp, taxgroup)
-        if not version:
+    version = _resolve_latest_version_https(taxgroup)
+    if not version:
+        # Fallback: try FTP for version resolution
+        try:
+            ftp = ftplib.FTP(NCBI_FTP_HOST, timeout=60)
+            ftp.login()
+            lines: list[str] = []
+            ftp.retrlines(f"LIST {NCBI_FTP_BASE}/{taxgroup}/", lines.append)
             ftp.quit()
-            return None
+            for line in lines:
+                if "latest_snps" in line and "->" in line:
+                    version = line.split("->")[-1].strip()
+                    logger.info("Resolved via FTP fallback -> %s for %s", version, taxgroup)
+                    break
+        except Exception:
+            pass
+    if not version:
+        logger.error("Could not resolve version for %s — skipping", taxgroup)
+        return None
 
-        ftp_path = f"{NCBI_FTP_BASE}/{taxgroup}/{version}/AMR/{version}.amr.metadata.tsv"
-        logger.info("Downloading: %s", ftp_path)
+    url = f"{NCBI_HTTPS_BASE}/{taxgroup}/{version}/AMR/{version}.amr.metadata.tsv"
+    logger.info("Downloading via HTTPS: %s", url)
 
+    try:
+        # Stream the download in chunks — handles files >400MB without timeout
         buf = io.BytesIO()
-        ftp.retrbinary(f"RETR {ftp_path}", buf.write)
-        ftp.quit()
+        downloaded_mb = 0.0
+        with requests.get(url, stream=True, timeout=600, verify=False) as resp:
+            resp.raise_for_status()
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
+                if chunk:
+                    buf.write(chunk)
+                    downloaded_mb += len(chunk) / 1024 / 1024
+                    if int(downloaded_mb) % 50 == 0 and downloaded_mb > 0:
+                        logger.info(
+                            "  %s: %.0f MB downloaded...", taxgroup, downloaded_mb
+                        )
 
         buf.seek(0)
         raw = buf.read().decode("utf-8", errors="replace")
-
         logger.info(
-            "Downloaded %s — %.1f MB decompressed",
+            "Downloaded %s — %.1f MB",
             taxgroup,
             len(raw) / 1024 / 1024,
         )
         return io.StringIO(raw)
 
-    except ftplib.all_errors as exc:
-        logger.error("FTP download failed for %s: %s", taxgroup, exc)
-        return None
+    except requests.exceptions.RequestException as exc:
+        logger.error("HTTPS download failed for %s: %s", taxgroup, exc)
+        # Fallback to FTP for smaller files
+        logger.info("Attempting FTP fallback for %s...", taxgroup)
+        try:
+            ftp = ftplib.FTP(NCBI_FTP_HOST, timeout=300)
+            ftp.login()
+            ftp_path = f"{NCBI_FTP_BASE}/{taxgroup}/{version}/AMR/{version}.amr.metadata.tsv"
+            buf = io.BytesIO()
+            ftp.retrbinary(f"RETR {ftp_path}", buf.write)
+            ftp.quit()
+            buf.seek(0)
+            raw = buf.read().decode("utf-8", errors="replace")
+            logger.info("FTP fallback succeeded for %s — %.1f MB", taxgroup, len(raw)/1024/1024)
+            return io.StringIO(raw)
+        except Exception as ftp_exc:
+            logger.error("FTP fallback also failed for %s: %s", taxgroup, ftp_exc)
+            return None
     except Exception as exc:
         logger.error("Unexpected error downloading %s: %s", taxgroup, exc)
         return None
