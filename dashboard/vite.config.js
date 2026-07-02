@@ -10,15 +10,6 @@ export default defineConfig({
     dedupe: ["react", "react-dom"],
   },
   build: {
-    chunkSizeWarningLimit: 1000,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          "vendor-react": ["react", "react-dom"],
-          "vendor-charts": ["recharts"],
-          "vendor-geo": ["d3-geo", "topojson-client"],
-        },
-      },
-    },
+    chunkSizeWarningLimit: 1500,
   },
 });
