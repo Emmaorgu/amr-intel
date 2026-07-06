@@ -158,9 +158,39 @@ MEASURE_MAP: dict[str, tuple[str, str, str]] = {
     "STAAUR.OXA.R.PROPORTION": (
         "Staphylococcus aureus", "Oxacillin", "Penicillins"),
 
-    # Streptococcus pneumoniae
+    # Streptococcus pneumoniae — expand beyond macrolides
     "STRPNE.MACROLIDES.R.PROPORTION": (
         "Streptococcus pneumoniae", "Azithromycin", "Macrolides"),
+    "STRPNE.PENICILLINS.R.PROPORTION": (
+        "Streptococcus pneumoniae", "Penicillin", "Penicillins"),
+    "STRPNE.CEF.R.PROPORTION": (
+        "Streptococcus pneumoniae", "Ceftriaxone", "Cephalosporins (3rd gen)"),
+
+    # Haemophilus influenzae (WHO BPPL 2024 Medium — new)
+    "HAEINF.AMINOPENICILLINS.R.PROPORTION": (
+        "Haemophilus influenzae", "Ampicillin", "Penicillins"),
+    "HAEINF.CEF.R.PROPORTION": (
+        "Haemophilus influenzae", "Ceftriaxone", "Cephalosporins (3rd gen)"),
+
+    # Salmonella spp. — fluoroquinolone resistance (WHO BPPL 2024 High — new)
+    # ECDC tracks Salmonella from EFSA/ECDC One Health reports
+    "SALSPP.FLUOROQUINOLONES.R.PROPORTION": (
+        "Salmonella spp.", "Ciprofloxacin", "Fluoroquinolones"),
+    "SALSPP.CEF.R.PROPORTION": (
+        "Salmonella spp.", "Ceftriaxone", "Cephalosporins (3rd gen)"),
+
+    # Shigella spp. — fluoroquinolone resistance (WHO BPPL 2024 High — new)
+    "SHISPP.FLUOROQUINOLONES.R.PROPORTION": (
+        "Shigella spp.", "Ciprofloxacin", "Fluoroquinolones"),
+
+    # Neisseria gonorrhoeae (WHO BPPL 2024 High — new)
+    # ECDC tracks via EURO-GASP (European Gonococcal Antimicrobial Surveillance Programme)
+    "NEIGON.CEF.R.PROPORTION": (
+        "Neisseria gonorrhoeae", "Ceftriaxone", "Cephalosporins (3rd gen)"),
+    "NEIGON.FLUOROQUINOLONES.R.PROPORTION": (
+        "Neisseria gonorrhoeae", "Ciprofloxacin", "Fluoroquinolones"),
+    "NEIGON.AZITHROMYCIN.R.PROPORTION": (
+        "Neisseria gonorrhoeae", "Azithromycin", "Macrolides"),
 }
 
 # ISO 3166-1 alpha-2 → alpha-3 mapping for ECDC country codes
@@ -388,20 +418,20 @@ def write_records(records: list[dict], engine) -> dict[str, int]:
         "rows_errored": 0,
     }
 
-    with engine.begin() as conn:
-        for record in records:
-            try:
+    for record in records:
+        try:
+            with engine.begin() as conn:
                 result = conn.execute(INSERT_SQL, record)
                 if result.rowcount == 1:
                     stats["rows_inserted"] += 1
                 else:
                     stats["rows_skipped"] += 1
-            except SQLAlchemyError as exc:
-                logger.error(
-                    "DB error on %s: %s",
-                    record.get("source_record_id"), exc,
-                )
-                stats["rows_errored"] += 1
+        except SQLAlchemyError as exc:
+            logger.error(
+                "DB error on %s: %s",
+                record.get("source_record_id"), exc,
+            )
+            stats["rows_errored"] += 1
 
     return stats
 

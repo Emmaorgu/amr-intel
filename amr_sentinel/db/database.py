@@ -16,6 +16,7 @@ Environment variables (in .env at project root):
     DB_NAME      — Database name (default: amr_sentinel)
     DB_USER      — Database user (default: postgres)
     DB_PASSWORD  — Database password (required)
+    DB_SSLMODE   — SSL mode (default: disabled for localhost, require for remote)
 
 Dependencies:
     sqlalchemy, psycopg2-binary, python-dotenv
@@ -29,7 +30,7 @@ from contextlib import contextmanager
 from typing import Generator
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 load_dotenv()
@@ -44,17 +45,21 @@ def _build_database_url() -> str:
     """
     Construct the PostgreSQL connection URL from environment variables.
 
+    Automatically appends sslmode=require when connecting to a non-localhost
+    host (e.g. Render, fly.io) unless DB_SSLMODE is explicitly set to disable.
+
     Returns:
         str: SQLAlchemy-compatible PostgreSQL connection URL.
 
     Raises:
         EnvironmentError: If DB_PASSWORD is not set.
     """
-    host = os.getenv("DB_HOST", "localhost")
-    port = os.getenv("DB_PORT", "5432")
-    name = os.getenv("DB_NAME", "amr_sentinel")
-    user = os.getenv("DB_USER", "postgres")
+    host     = os.getenv("DB_HOST", "localhost")
+    port     = os.getenv("DB_PORT", "5432")
+    name     = os.getenv("DB_NAME", "amr_sentinel")
+    user     = os.getenv("DB_USER", "postgres")
     password = os.getenv("DB_PASSWORD")
+    sslmode  = os.getenv("DB_SSLMODE")
 
     if not password:
         raise EnvironmentError(
@@ -62,7 +67,12 @@ def _build_database_url() -> str:
             "Add it to your .env file at the project root."
         )
 
-    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
+    # Auto-enable SSL for remote hosts unless caller explicitly overrides
+    if sslmode is None:
+        sslmode = "disable" if host in ("localhost", "127.0.0.1") else "require"
+
+    base_url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
+    return f"{base_url}?sslmode={sslmode}"
 
 
 # ---------------------------------------------------------------------------
@@ -75,13 +85,12 @@ engine = create_engine(
     DATABASE_URL,
     pool_size=5,
     max_overflow=10,
-    pool_pre_ping=True,          # test connections before use
-    pool_recycle=3600,           # recycle connections after 1 hour
-    echo=False,                  # set True for SQL debug logging
+    pool_pre_ping=True,
+    pool_recycle=3600,
+    echo=False,
     future=True,
 )
 
-# Log successful engine creation (not the URL — it contains the password)
 logger.info(
     "Database engine created: host=%s port=%s db=%s user=%s",
     os.getenv("DB_HOST", "localhost"),
@@ -98,7 +107,7 @@ SessionLocal = sessionmaker(
     bind=engine,
     autocommit=False,
     autoflush=False,
-    expire_on_commit=False,    # avoids lazy-load errors after commit
+    expire_on_commit=False,
 )
 
 
@@ -112,13 +121,9 @@ def get_session() -> Generator[Session, None, None]:
     Usage:
         with get_session() as session:
             session.add(alert)
-        # committed automatically
 
     Yields:
         Session: An active SQLAlchemy ORM session.
-
-    Raises:
-        Any exception raised inside the block (after rollback).
     """
     session = SessionLocal()
     try:

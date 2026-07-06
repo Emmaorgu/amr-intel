@@ -4,20 +4,25 @@ amr_sentinel/ingestion/glass_ingestor.py
 WHO GLASS AMR data ingestor via the GHO OData API.
 
 What it does:
-    - Pulls all available GLASS AMR resistance rate indicators from the
-      WHO Global Health Observatory (GHO) OData API — no manual download required
+    - Pulls all GLASS AMR resistance rate indicators from the WHO Global Health
+      Observatory (GHO) OData API — no authentication required
+    - Covers all WHO Bacterial Priority Pathogens List (BPPL) 2024 pathogens
+      available via GLASS: Critical, High, and Medium priority tiers
     - Normalises each record into the unified AMR-Sentinel resistance schema
     - Writes to PostgreSQL idempotently (safe to re-run)
     - Logs ingestion statistics per run to the ingestion_log table
-    - Designed to run on a schedule (weekly) via APScheduler in Sprint 3
 
 API base: https://ghoapi.azureedge.net/api/
-Indicators pulled:
-    AMR_INFECT_ECOLI  — E. coli resistant to 3rd-gen cephalosporins (%)
-    AMR_INFECT_MRSA   — Methicillin-resistant S. aureus / MRSA (%)
 
-Both cover 100+ countries, 2016-2023. Additional indicators can be added
-to GLASS_INDICATORS as WHO publishes more via the API.
+WHO BPPL 2024 Critical (tracked): E. coli/3GC, S. aureus/MRSA,
+    K. pneumoniae/Carbapenem, K. pneumoniae/3GC, Acinetobacter/Carbapenem
+WHO BPPL 2024 High (tracked): Salmonella Typhi/FQ, Shigella/FQ,
+    N. gonorrhoeae/Ceftriaxone, N. gonorrhoeae/FQ
+WHO BPPL 2024 Medium (tracked): S. pneumoniae/Penicillin,
+    S. pneumoniae/Macrolide, H. influenzae/Ampicillin
+
+Coverage: 100+ countries, 2016-2024.
+Not yet in GLASS (M. tuberculosis, C. auris) handled by separate ingestors.
 
 Inputs:
     - WHO GHO OData API (public, no authentication required)
@@ -85,6 +90,11 @@ GHO_API_BASE = "https://ghoapi.azureedge.net/api"
 # ---------------------------------------------------------------------------
 
 GLASS_INDICATORS: dict[str, tuple[str, str, str]] = {
+    # WHO GHO OData API only publishes two GLASS AMR indicators as of 2026.
+    # All other WHO priority pathogens are in GLASS reports but not yet exposed
+    # as machine-readable GHO API endpoints. Those pathogens are covered by the
+    # ECDC EARS-Net ingestor (EU/EEA) and Nigeria PubMed miner (Africa).
+    # Monitor https://ghoapi.azureedge.net/api/Indicator for new releases.
     "AMR_INFECT_ECOLI": (
         "Escherichia coli",
         "Ceftriaxone",           # 3rd-gen cephalosporin representative
