@@ -223,10 +223,21 @@ function ConfBadge({ conf }) {
   );
 }
 
-function StatCard({ label, value, sub, accent, delta }) {
+function StatCard({ label, value, sub, accent, delta, onClick }) {
   const col = accent || C.teal;
+  const clickable = typeof onClick === "function";
   return (
-    <div style={{ background:C.surface, border:"1px solid " + C.border, borderRadius:6, padding:"14px 18px", minWidth:0 }}>
+    <div
+      onClick={onClick}
+      style={{
+        background:C.surface, border:"1px solid " + C.border, borderRadius:6,
+        padding:"14px 18px", minWidth:0,
+        cursor: clickable ? "pointer" : "default",
+        transition: clickable ? "border-color .15s, background .15s" : undefined,
+      }}
+      onMouseEnter={clickable ? (e => { e.currentTarget.style.borderColor = C.borderHigh; e.currentTarget.style.background = C.surfaceHigh; }) : undefined}
+      onMouseLeave={clickable ? (e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }) : undefined}
+    >
       <div style={{ color:C.muted, fontSize:10, fontWeight:600, letterSpacing:".08em", textTransform:"uppercase", marginBottom:6 }}>{label}</div>
       <div style={{ fontFamily:"JetBrains Mono,monospace", fontSize:26, fontWeight:700, color:col, lineHeight:1 }}>{value}</div>
       {sub && <div style={{ color:C.muted, fontSize:11, marginTop:5 }}>{sub}</div>}
@@ -675,7 +686,7 @@ function GlobalIntelMap({ alerts, onInvestigate }) {
 }
 
 // ─── Screen 1: Command Center ─────────────────────────────────────────────────
-function CommandCenter({ onInvestigate, setScreen }) {
+function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
   const [stats,   setStats]   = useState(null);
   const [radar,   setRadar]   = useState([]);
   const [alerts,  setAlerts]  = useState([]);
@@ -711,9 +722,15 @@ function CommandCenter({ onInvestigate, setScreen }) {
   return (
     <div className="fade-up" style={{padding:"20px 24px",maxWidth:1400}}>
       <div className="stat-row" style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:20}}>
-        <StatCard label="Avg Lead Time" value={avgMonths + "mo"} sub="vs official reports" accent={C.teal} delta="+0.8 vs last month"/>
+        <StatCard label="Avg Lead Time" value={avgMonths + "mo"} sub="vs official reports" accent={C.teal}/>
         <StatCard label="Signals Validated" value={stats?.validated_signals_count || 5} sub="outcome confirmed" accent={C.green}/>
-        <StatCard label="Critical Alerts" value={stats?.critical_alerts || 0} sub="+5 new today" accent={C.red}/>
+        <StatCard
+          label="Critical Alerts"
+          value={stats?.critical_alerts || 0}
+          sub={(stats?.critical_alerts_today || 0) + " new today"}
+          accent={C.red}
+          onClick={() => onViewCriticalToday && onViewCriticalToday()}
+        />
         <StatCard label="Countries Monitored" value={stats?.countries_monitored || 103} sub="Global coverage" accent={C.blue}/>
         <StatCard label="Records Processed" value={(stats?.resistance_records_total || 7511).toLocaleString()} sub="WHO/ECDC/NCBI" accent={C.amber}/>
         <StatCard label="System Uptime" value="99.8%" sub="last 30 days" accent={C.green}/>
@@ -810,12 +827,12 @@ function CommandCenter({ onInvestigate, setScreen }) {
 }
 
 // ─── Screen 2: Threat Operations ─────────────────────────────────────────────
-function ThreatOperations({ onInvestigate }) {
+function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
   const [alerts,  setAlerts]  = useState([]);
   const [loading, setLoading] = useState(true);
   const [search,  setSearch]  = useState("");
-  const [tab,     setTab]     = useState("all");
-  const [sortBy,  setSortBy]  = useState("severity_score");
+  const [tab,     setTab]     = useState(initialTab || "all");
+  const [sortBy,  setSortBy]  = useState(initialSort || "severity_score");
   const [filters, setFilters] = useState({ pathogen:"all", antibiotic:"all", region:"all" });
 
   useEffect(() => {
@@ -848,7 +865,11 @@ function ThreatOperations({ onInvestigate }) {
     .filter(a => filters.pathogen==="all" || a.pathogen_name===filters.pathogen)
     .filter(a => filters.antibiotic==="all" || a.antibiotic_name===filters.antibiotic)
     .filter(a => filters.region==="all" || getRegion(a)===filters.region)
-    .sort((a,b) => sortBy==="severity_score" ? (b.severity_score||0)-(a.severity_score||0) : (b.current_resistance||0)-(a.current_resistance||0));
+    .sort((a,b) => {
+      if (sortBy === "severity_score") return (b.severity_score||0)-(a.severity_score||0);
+      if (sortBy === "created_at") return new Date(b.created_at||0) - new Date(a.created_at||0);
+      return (b.current_resistance||0)-(a.current_resistance||0);
+    });
 
   if (loading) return <Spinner />;
 
@@ -883,9 +904,9 @@ function ThreatOperations({ onInvestigate }) {
         </select>
         <div style={{marginLeft:"auto",display:"flex",gap:6,fontSize:11,color:C.muted,alignItems:"center"}}>
           Sort:
-          {["severity_score","current_resistance"].map(s=>(
+          {["severity_score","current_resistance","created_at"].map(s=>(
             <button key={s} onClick={()=>setSortBy(s)} style={{background:sortBy===s?C.surfaceHigh:"none",border:"1px solid " + (sortBy===s?C.borderHigh:C.border),color:sortBy===s?C.white:C.muted,borderRadius:4,padding:"3px 8px",fontSize:11}}>
-              {s==="severity_score"?"Score":"Rate"}
+              {s==="severity_score"?"Score":s==="created_at"?"Newest":"Rate"}
             </button>
           ))}
         </div>
@@ -2131,6 +2152,10 @@ export default function App() {
   const [stats,       setStats]       = useState(null);
   const [genomicCount,setGenomicCount]= useState(0);
   const [mobOpen,     setMobOpen]     = useState(false);
+  // Set when navigating into Threat Operations from a stat card that implies
+  // a specific tab/sort (e.g. "Critical Alerts" → critical tab, newest first).
+  const [opInitialTab,  setOpInitialTab]  = useState("all");
+  const [opInitialSort, setOpInitialSort] = useState("severity_score");
 
   useEffect(() => {
     apiFetch("/stats").then(setStats);
@@ -2145,6 +2170,13 @@ export default function App() {
   const handleInvestigate = useCallback((alert) => {
     setInvAlert(alert);
     setScreen("investigate");
+  }, []);
+
+  // "Critical Alerts" stat card → Threat Operations, Critical tab, newest first.
+  const handleViewCriticalToday = useCallback(() => {
+    setOpInitialTab("critical");
+    setOpInitialSort("created_at");
+    setScreen("operations");
   }, []);
 
   const nav = (id) => { setScreen(id); setMobOpen(false); };
@@ -2187,8 +2219,8 @@ export default function App() {
             <span style={{fontSize:9,color:C.muted,letterSpacing:".06em",textTransform:"uppercase"}}>Pathogen Intelligence</span>
           </div>
 
-          {screen==="command"     && <CommandCenter      onInvestigate={handleInvestigate} setScreen={setScreen}/>}
-          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate}/>}
+          {screen==="command"     && <CommandCenter      onInvestigate={handleInvestigate} setScreen={setScreen} onViewCriticalToday={handleViewCriticalToday}/>}
+          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate} initialTab={opInitialTab} initialSort={opInitialSort}/>}
           {screen==="emergence"   && <EmergenceRadarScreen onInvestigate={handleInvestigate}/>}
           {screen==="genomic"     && <GenomicIntelligence onInvestigate={handleInvestigate}/>}
           {screen==="investigate" && <AlertInvestigation  alert={invAlert}/>}

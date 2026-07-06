@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from dotenv import load_dotenv
@@ -167,6 +167,8 @@ class FeedbackResponseSchema(BaseModel):
 class StatsSchema(BaseModel):
     total_alerts: int
     critical_alerts: int
+    critical_alerts_today: int = 0
+    new_alerts_today: int = 0
     warn_alerts: int
     validated_alerts: int
     false_positive_alerts: int
@@ -362,6 +364,18 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     last_run = last_alert[0] if last_alert else None
     rr_total = db.query(ResistanceRecord).count()
 
+    # Real "today" counts — computed from actual created_at timestamps over
+    # a rolling 24-hour window, not a hardcoded placeholder. This is what
+    # powers the "+N new today" deltas on the Command Center stat cards.
+    cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    critical_today = db.query(Alert).filter(
+        Alert.severity_tier == "critical",
+        Alert.created_at >= cutoff_24h,
+    ).count()
+    new_today = db.query(Alert).filter(
+        Alert.created_at >= cutoff_24h,
+    ).count()
+
     # Genomic signals count
     try:
         from amr_sentinel.db.models import GenomicSignal
@@ -383,7 +397,9 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     ).count()
 
     return StatsSchema(
-        total_alerts=total, critical_alerts=critical, warn_alerts=warn,
+        total_alerts=total, critical_alerts=critical,
+        critical_alerts_today=critical_today, new_alerts_today=new_today,
+        warn_alerts=warn,
         validated_alerts=validated, false_positive_alerts=false_pos,
         pathogens_monitored=pathogens, countries_monitored=countries,
         last_pipeline_run=last_run, resistance_records_total=rr_total,
