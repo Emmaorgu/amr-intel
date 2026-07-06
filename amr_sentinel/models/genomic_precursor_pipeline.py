@@ -24,11 +24,24 @@ Outputs:
     - Appended rows in output_queue.jsonl
     - Summary dict returned to orchestrator
 
-Dependencies: same as genomic_precursor_detector.py + uuid
+Dependencies: same as genomic_precursor_detector.py + uuid + hashlib
+
+Idempotency note (fixed 2026-07-06):
+    alert_id is now a deterministic UUID derived from the signal's logical
+    identity (gene + pathogen + country + year) rather than a random UUID.
+    Previously, every daily pipeline run generated a brand-new random UUID
+    for the same underlying genomic signal, so alert_writer.py's UUID-based
+    deduplication never recognised repeat signals as duplicates — causing
+    the same signal to be re-inserted as a "new" alert on every single run
+    (observed: one signal inserted 40 times over ~40 daily runs). Making
+    the ID deterministic means the same signal always maps to the same
+    alert_id across runs, so alert_writer.py correctly skips it as an
+    existing row instead of duplicating it.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -57,6 +70,33 @@ MIN_SCORE = 50
 
 # Only these confidence levels flow into the alert pipeline
 PIPELINE_CONFIDENCE_LEVELS = {"HIGH", "MEDIUM"}
+
+
+def _deterministic_alert_id(signal) -> str:
+    """
+    Build a stable UUID from a genomic signal's logical identity.
+
+    The same underlying signal (same gene, pathogen, country, and latest
+    data year) must always produce the same alert_id across pipeline runs.
+    This allows alert_writer.py's UUID-based deduplication to correctly
+    skip re-insertion of a signal that was already written on a previous
+    run, instead of treating a random new UUID as a brand-new alert every
+    single day.
+
+    Args:
+        signal: PrecursorSignal dataclass instance. Must expose
+            gene_name, pathogen_name, country_iso3, and latest_year.
+
+    Returns:
+        A UUID string, deterministically derived via MD5 of the signal's
+        identity key. Not cryptographically secure — not needed here,
+        this is purely for stable deduplication, not security.
+    """
+    key = (
+        f"genomic|{signal.gene_name}|{signal.pathogen_name}|"
+        f"{signal.country_iso3}|{signal.latest_year}"
+    )
+    return str(uuid.UUID(hashlib.md5(key.encode("utf-8")).hexdigest()))
 
 
 def precursor_to_alert_dict(signal, cycle_id: str = "") -> dict:
@@ -98,7 +138,7 @@ def precursor_to_alert_dict(signal, cycle_id: str = "") -> dict:
 
     return {
         # Core alert schema fields
-        "alert_id": str(uuid.uuid4()),
+        "alert_id": _deterministic_alert_id(signal),
         "created_at": now,
         "pathogen_name": signal.pathogen_name,
         "antibiotic_name": signal.drug_class,   # gene confers class-level resistance
