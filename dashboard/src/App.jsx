@@ -683,15 +683,20 @@ function CommandCenter({ onInvestigate, setScreen }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Genomic precursor alerts are capped at a lower severity score (~80) than
+    // many phenotypic alerts, so fetching top-N-by-severity-score alone
+    // structurally excludes genomic signals from ever appearing on this page.
+    // Fetch genomic alerts explicitly via signal_type and merge them in.
     Promise.all([
       apiFetch("/stats"),
       apiFetch("/emergence-radar?limit=10"),
       apiFetch("/alerts?page_size=100&sort_by=severity_score"),
+      apiFetch("/alerts?signal_type=genomic_precursor&page_size=200&sort_by=severity_score"),
       apiFetch("/lead-times"),
-    ]).then(([s, r, a, l]) => {
+    ]).then(([s, r, a, g, l]) => {
       setStats(s);
       setRadar(Array.isArray(r) ? r.filter(x => x.emergence_tier === "emerging" || x.emergence_tier === "escalating") : []);
-      setAlerts(a?.alerts || []);
+      setAlerts([...(a?.alerts || []), ...(g?.alerts || [])]);
       setLtimes(l);
       setLoading(false);
     });
@@ -814,8 +819,14 @@ function ThreatOperations({ onInvestigate }) {
   const [filters, setFilters] = useState({ pathogen:"all", antibiotic:"all", region:"all" });
 
   useEffect(() => {
-    apiFetch("/alerts?page_size=200&sort_by=severity_score").then(data => {
-      setAlerts(data?.alerts || []);
+    // Same fix as CommandCenter: genomic alerts score lower than many
+    // phenotypic alerts, so a plain top-200-by-severity fetch excludes them.
+    // Fetch the genomic slice explicitly and merge it in.
+    Promise.all([
+      apiFetch("/alerts?page_size=200&sort_by=severity_score"),
+      apiFetch("/alerts?signal_type=genomic_precursor&page_size=200&sort_by=severity_score"),
+    ]).then(([data, genomicData]) => {
+      setAlerts([...(data?.alerts || []), ...(genomicData?.alerts || [])]);
       setLoading(false);
     });
   }, []);
@@ -1053,9 +1064,12 @@ function GenomicIntelligence({ onInvestigate }) {
   const [selected, setSelected] = useState(null);
 
   useEffect(() => {
-    apiFetch("/alerts?page_size=200&sort_by=severity_score").then(data => {
-      const all = data?.alerts || [];
-      setSignals(all.filter(a => a.signal_type === "genomic_precursor"));
+    // Query the API directly for genomic_precursor signals instead of fetching
+    // a general severity-sorted page and filtering client-side. Genomic scores
+    // are capped (~80) below many phenotypic alerts, so a general top-N fetch
+    // would silently exclude every genomic signal before this filter ever runs.
+    apiFetch("/alerts?signal_type=genomic_precursor&page_size=200&sort_by=severity_score").then(data => {
+      setSignals(data?.alerts || []);
       setLoading(false);
     });
   }, []);
@@ -2120,9 +2134,11 @@ export default function App() {
 
   useEffect(() => {
     apiFetch("/stats").then(setStats);
-    apiFetch("/alerts?page_size=200&sort_by=severity_score").then(data => {
-      const all = data?.alerts || [];
-      setGenomicCount(all.filter(a => a.signal_type === "genomic_precursor").length);
+    // Query signal_type directly rather than filtering a severity-sorted
+    // general page — see GenomicIntelligence/CommandCenter for why that
+    // undercounts (genomic scores are capped below many phenotypic alerts).
+    apiFetch("/alerts?signal_type=genomic_precursor&page_size=200&sort_by=severity_score").then(data => {
+      setGenomicCount((data?.alerts || []).length);
     });
   }, []);
 
