@@ -4,7 +4,7 @@ amr_sentinel/ingestion/ecdc_ingestor.py
 ECDC EARS-Net AMR data ingestor via the ECDC Surveillance Atlas REST API.
 
 What it does:
-    - Fetches resistance rate data for 6 WHO-priority pathogens across
+    - Fetches resistance rate data for 8 WHO-priority pathogens across
       11 antibiotic classes from the ECDC Atlas API (2014–2024)
     - Covers 30 EU/EEA countries with annual data — ~25,000+ records
     - Normalises each record into the unified AMR-Sentinel resistance schema
@@ -27,6 +27,26 @@ Pathogens covered:
     PSEAER  — Pseudomonas aeruginosa
     STAAUR  — Staphylococcus aureus (MRSA)
     STRPNE  — Streptococcus pneumoniae
+
+Pathogens confirmed NOT available via this API (health topic 4 / EARS-Net),
+verified 2026-07-14 by querying GetIndicatorMeasuresForHealthTopicAndDataset
+directly and inspecting all 152 returned measure codes — no matching prefix
+exists under any naming convention:
+    - Haemophilus influenzae — not part of EARS-Net
+    - Salmonella spp.        — tracked via ECDC/EFSA food/waterborne
+                                surveillance, a different health topic
+    - Shigella spp.          — same as Salmonella, different health topic
+    - Neisseria gonorrhoeae  — tracked via Euro-GASP, a separate
+                                ECDC surveillance programme/dataset
+    - Streptococcus pneumoniae cephalosporin resistance — STRPNE only has
+      MACROLIDES and PENICILLINS measures in this dataset; no CEF measure
+      exists for this pathogen here.
+These were previously added to MEASURE_MAP as WHO-priority-list gaps to
+fill, but every one of them returned zero rows on every dataset because
+the codes don't exist in this API at all — not a naming mismatch, a real
+data-source gap. Ingesting any of these pathogens requires a separate
+ingestor against ECDC's other surveillance topics/datasets (e.g. a future
+Euro-GASP ingestor for N. gonorrhoeae), not an addition to this map.
 
 Inputs:
     - ECDC Atlas REST API (public, no authentication required)
@@ -92,6 +112,13 @@ ECDC_GEO_LEVEL = 2         # Country level
 # Maps ECDC measure code suffix → (pathogen_name, antibiotic_name, class)
 # We only pull R.PROPORTION measures (resistance percentage).
 # COMPLETENESS and COMBINED measures are excluded.
+#
+# Every code below was verified present in the live API response on
+# 2026-07-14 (152 total measures returned, all matched against this map).
+# Do not add a pathogen/measure here without first confirming it appears
+# in GetIndicatorMeasuresForHealthTopicAndDataset — several WHO-priority
+# pathogens (H. influenzae, Salmonella, Shigella, N. gonorrhoeae) do not
+# exist under this health topic at all; see module docstring for details.
 # ---------------------------------------------------------------------------
 
 MEASURE_MAP: dict[str, tuple[str, str, str]] = {
@@ -158,39 +185,14 @@ MEASURE_MAP: dict[str, tuple[str, str, str]] = {
     "STAAUR.OXA.R.PROPORTION": (
         "Staphylococcus aureus", "Oxacillin", "Penicillins"),
 
-    # Streptococcus pneumoniae — expand beyond macrolides
+    # Streptococcus pneumoniae
+    # NOTE: only MACROLIDES and PENICILLINS measures exist for STRPNE in
+    # this dataset. A previously-added STRPNE.CEF.R.PROPORTION entry was
+    # removed 2026-07-14 — confirmed absent from the live API response.
     "STRPNE.MACROLIDES.R.PROPORTION": (
         "Streptococcus pneumoniae", "Azithromycin", "Macrolides"),
     "STRPNE.PENICILLINS.R.PROPORTION": (
         "Streptococcus pneumoniae", "Penicillin", "Penicillins"),
-    "STRPNE.CEF.R.PROPORTION": (
-        "Streptococcus pneumoniae", "Ceftriaxone", "Cephalosporins (3rd gen)"),
-
-    # Haemophilus influenzae (WHO BPPL 2024 Medium — new)
-    "HAEINF.AMINOPENICILLINS.R.PROPORTION": (
-        "Haemophilus influenzae", "Ampicillin", "Penicillins"),
-    "HAEINF.CEF.R.PROPORTION": (
-        "Haemophilus influenzae", "Ceftriaxone", "Cephalosporins (3rd gen)"),
-
-    # Salmonella spp. — fluoroquinolone resistance (WHO BPPL 2024 High — new)
-    # ECDC tracks Salmonella from EFSA/ECDC One Health reports
-    "SALSPP.FLUOROQUINOLONES.R.PROPORTION": (
-        "Salmonella spp.", "Ciprofloxacin", "Fluoroquinolones"),
-    "SALSPP.CEF.R.PROPORTION": (
-        "Salmonella spp.", "Ceftriaxone", "Cephalosporins (3rd gen)"),
-
-    # Shigella spp. — fluoroquinolone resistance (WHO BPPL 2024 High — new)
-    "SHISPP.FLUOROQUINOLONES.R.PROPORTION": (
-        "Shigella spp.", "Ciprofloxacin", "Fluoroquinolones"),
-
-    # Neisseria gonorrhoeae (WHO BPPL 2024 High — new)
-    # ECDC tracks via EURO-GASP (European Gonococcal Antimicrobial Surveillance Programme)
-    "NEIGON.CEF.R.PROPORTION": (
-        "Neisseria gonorrhoeae", "Ceftriaxone", "Cephalosporins (3rd gen)"),
-    "NEIGON.FLUOROQUINOLONES.R.PROPORTION": (
-        "Neisseria gonorrhoeae", "Ciprofloxacin", "Fluoroquinolones"),
-    "NEIGON.AZITHROMYCIN.R.PROPORTION": (
-        "Neisseria gonorrhoeae", "Azithromycin", "Macrolides"),
 }
 
 # ISO 3166-1 alpha-2 → alpha-3 mapping for ECDC country codes
@@ -331,7 +333,6 @@ def normalise_record(
     time_code = raw.get("TimeCode")
     y_value = raw.get("YValue")
     n_tested = raw.get("N")
-    uid = raw.get("UID")
 
     if not iso2 or not time_code:
         return None
@@ -378,7 +379,13 @@ def normalise_record(
         "resistance_rate": resistance_rate,
         "sample_count": sample_count,
         "data_source": "ECDC",
-        "source_record_id": f"ECDC|{measure_code}|{iso2}|{time_code}|{uid}",
+        # Deterministic — deliberately excludes the API's per-response "UID"
+        # field, which is not stable across separate API calls. Including it
+        # previously caused every re-run to be treated as new data and fully
+        # duplicate the ECDC dataset on each ingest. measure_code + iso2 +
+        # time_code already uniquely identifies (pathogen, antibiotic,
+        # country, year), so this ID is stable across runs.
+        "source_record_id": f"ECDC|{measure_code}|{iso2}|{time_code}",
         "ingested_at": ingested_at,
     }
 
