@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="AMR-Sentinel Intelligence API",
     description="Autonomous pathogen intelligence. Early warning for antimicrobial resistance.",
-    version="0.4.0",
+    version="0.5.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -166,10 +166,11 @@ class FeedbackResponseSchema(BaseModel):
 
 class StatsSchema(BaseModel):
     total_alerts: int
-    critical_alerts: int
+    critical_alerts: int          # phenotypic only — excludes genomic precursors
     critical_alerts_today: int = 0
     new_alerts_today: int = 0
-    warn_alerts: int
+    warn_alerts: int              # phenotypic only
+    genomic_precursor_alerts: int = 0   # total genomic precursor count (separate signal class)
     validated_alerts: int
     false_positive_alerts: int
     pathogens_monitored: int
@@ -329,8 +330,8 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
         "phenotypic_gap", "surveillance_confidence", "surveillance_caveat",
         "spread_risk_countries", "intelligence_summary", "who_priority",
     ]
-    for field in genomic_fields:
-        d[field] = extra.get(field)
+    for gfield in genomic_fields:
+        d[gfield] = extra.get(gfield)
 
     return d
 
@@ -348,14 +349,37 @@ def health_check():
                 "timestamp": datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail=f"Database unreachable: {exc}")
+                            detail="Database unreachable: " + str(exc))
 
 
 @app.get("/stats", response_model=StatsSchema, tags=["Intelligence"])
 def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
+    """
+    Platform statistics.
+
+    critical_alerts and warn_alerts count PHENOTYPIC signals only
+    (trajectory_deviation and rate_spike). Genomic precursor alerts are a
+    distinct signal class and reported separately as genomic_precursor_alerts.
+
+    This separation prevents genomic precursor counts (which can be large and
+    grow with each NDARO update) from inflating the headline operational
+    metrics that clinicians and analysts use to triage their day.
+    """
+    # Total across all signal types
     total = db.query(Alert).count()
-    critical = db.query(Alert).filter(Alert.severity_tier == "critical").count()
-    warn = db.query(Alert).filter(Alert.severity_tier == "warn").count()
+
+    # Phenotypic-only base query — excludes genomic_precursor
+    phenotypic_q = db.query(Alert).filter(Alert.signal_type != "genomic_precursor")
+
+    # Headline critical/warn counts: phenotypic only
+    critical = phenotypic_q.filter(Alert.severity_tier == "critical").count()
+    warn = phenotypic_q.filter(Alert.severity_tier == "warn").count()
+
+    # Genomic precursor count — reported separately, not in critical headline
+    genomic_precursor_count = db.query(Alert).filter(
+        Alert.signal_type == "genomic_precursor"
+    ).count()
+
     validated = db.query(Alert).filter(Alert.outcome_confirmed == True).count()
     false_pos = db.query(Alert).filter(Alert.outcome_confirmed == False).count()
     pathogens = db.query(Alert.pathogen_name).distinct().count()
@@ -364,19 +388,21 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     last_run = last_alert[0] if last_alert else None
     rr_total = db.query(ResistanceRecord).count()
 
-    # Real "today" counts — computed from actual created_at timestamps over
-    # a rolling 24-hour window, not a hardcoded placeholder. This is what
-    # powers the "+N new today" deltas on the Command Center stat cards.
+    # Rolling 24h window — phenotypic only for operational relevance
     cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
-    critical_today = db.query(Alert).filter(
-        Alert.severity_tier == "critical",
-        Alert.created_at >= cutoff_24h,
-    ).count()
-    new_today = db.query(Alert).filter(
-        Alert.created_at >= cutoff_24h,
-    ).count()
+    critical_today = (
+        phenotypic_q
+        .filter(Alert.severity_tier == "critical")
+        .filter(Alert.created_at >= cutoff_24h)
+        .count()
+    )
+    new_today = (
+        phenotypic_q
+        .filter(Alert.created_at >= cutoff_24h)
+        .count()
+    )
 
-    # Genomic signals count
+    # Genomic signals (raw isolate records, not alerts)
     try:
         from amr_sentinel.db.models import GenomicSignal
         genomic_total = db.query(GenomicSignal).count()
@@ -397,14 +423,21 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     ).count()
 
     return StatsSchema(
-        total_alerts=total, critical_alerts=critical,
-        critical_alerts_today=critical_today, new_alerts_today=new_today,
+        total_alerts=total,
+        critical_alerts=critical,
+        critical_alerts_today=critical_today,
+        new_alerts_today=new_today,
         warn_alerts=warn,
-        validated_alerts=validated, false_positive_alerts=false_pos,
-        pathogens_monitored=pathogens, countries_monitored=countries,
-        last_pipeline_run=last_run, resistance_records_total=rr_total,
+        genomic_precursor_alerts=genomic_precursor_count,
+        validated_alerts=validated,
+        false_positive_alerts=false_pos,
+        pathogens_monitored=pathogens,
+        countries_monitored=countries,
+        last_pipeline_run=last_run,
+        resistance_records_total=rr_total,
         genomic_signals_total=genomic_total,
-        avg_lead_time_days=avg_days, avg_lead_time_months=avg_months,
+        avg_lead_time_days=avg_days,
+        avg_lead_time_months=avg_months,
         validated_signals_count=len(lead_times),
         emerging_threats_count=emerging_count,
     )
@@ -433,9 +466,9 @@ def list_alerts(
     if country:
         q = q.filter(Alert.country_iso3 == country.upper())
     if pathogen:
-        q = q.filter(Alert.pathogen_name.ilike(f"%{pathogen}%"))
+        q = q.filter(Alert.pathogen_name.ilike("%" + pathogen + "%"))
     if antibiotic:
-        q = q.filter(Alert.antibiotic_name.ilike(f"%{antibiotic}%"))
+        q = q.filter(Alert.antibiotic_name.ilike("%" + antibiotic + "%"))
     if region:
         q = q.filter(Alert.region_who == region.upper())
     if trend:
@@ -468,7 +501,7 @@ def get_alert(alert_id: uuid.UUID, db: Session = Depends(get_db),
               _: str = Depends(get_api_key)):
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
-        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found.")
+        raise HTTPException(status_code=404, detail="Alert " + str(alert_id) + " not found.")
     return _alert_to_dict(alert)
 
 
@@ -480,7 +513,7 @@ def submit_feedback(
 ):
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
-        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found.")
+        raise HTTPException(status_code=404, detail="Alert " + str(alert_id) + " not found.")
 
     feedback = Feedback(
         alert_id=alert_id, feedback_type=payload.feedback_type,
@@ -511,8 +544,8 @@ def get_resistance_trends(
     _: str = Depends(get_api_key),
 ):
     q = db.query(ResistanceRecord).filter(
-        ResistanceRecord.pathogen_name.ilike(f"%{pathogen}%"),
-        ResistanceRecord.antibiotic_name.ilike(f"%{antibiotic}%"),
+        ResistanceRecord.pathogen_name.ilike("%" + pathogen + "%"),
+        ResistanceRecord.antibiotic_name.ilike("%" + antibiotic + "%"),
     )
     if country:
         q = q.filter(ResistanceRecord.country_iso3 == country.upper())
@@ -595,7 +628,7 @@ def get_emergence_radar(
     if region:
         q = q.filter(EmergenceScore.region_who == region.upper())
     if pathogen:
-        q = q.filter(EmergenceScore.pathogen_name.ilike(f"%{pathogen}%"))
+        q = q.filter(EmergenceScore.pathogen_name.ilike("%" + pathogen + "%"))
 
     q = q.order_by(EmergenceScore.emergence_score.desc())
     scores = q.limit(limit).all()

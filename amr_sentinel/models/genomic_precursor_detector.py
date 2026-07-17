@@ -14,6 +14,8 @@ Key design decisions:
   ingested (USA, China, etc.)
 - Doubling time estimation and days-to-threshold projection
 - Deduplication: one signal per gene/pathogen/country (most recent year window)
+- Deterministic UUID: signal_id derived from (gene_name, pathogen_name, country_iso3)
+  so the alert writer can upsert instead of blind-insert on every pipeline run.
 - Geographic linkage notes for epidemiologically connected countries
 
 Signal type: 'genomic_precursor'
@@ -31,10 +33,12 @@ Dependencies:
     pip install sqlalchemy psycopg2-binary python-dotenv numpy
 """
 
+import hashlib
 import json
 import logging
 import math
 import os
+import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -117,6 +121,32 @@ EPIGEOGRAPHIC_LINKS: dict[str, list[str]] = {
     "CHN": ["USA", "AUS", "GBR"],
 }
 
+
+# ---------------------------------------------------------------------------
+# Deterministic UUID
+# ---------------------------------------------------------------------------
+
+def _deterministic_signal_id(gene_name: str, pathogen_name: str, country_iso3: str) -> str:
+    """
+    Generate a stable UUID for a genomic precursor signal from its natural key.
+
+    Identical (gene_name, pathogen_name, country_iso3) always produce the same
+    UUID, so the alert writer can use ON CONFLICT DO UPDATE instead of blind
+    insert, preventing duplication across pipeline re-runs.
+
+    Args:
+        gene_name: Full gene name e.g. "blaNDM-1"
+        pathogen_name: Species name e.g. "Escherichia coli"
+        country_iso3: ISO3 country code e.g. "BGD"
+
+    Returns:
+        UUID string
+    """
+    key = "genomic|" + gene_name + "|" + pathogen_name + "|" + country_iso3
+    digest = hashlib.md5(key.encode()).hexdigest()
+    return str(uuid.UUID(digest))
+
+
 # ---------------------------------------------------------------------------
 # Data class
 # ---------------------------------------------------------------------------
@@ -152,6 +182,9 @@ class PrecursorSignal:
     signal_type: str = "genomic_precursor"
     spread_risk_countries: list = field(default_factory=list)
     intelligence_summary: str = ""
+    # Deterministic ID — stable across pipeline re-runs for this gene/pathogen/country.
+    # Set explicitly in run_detector(); default fallback is random for safety.
+    signal_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     detected_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -215,8 +248,8 @@ def fetch_phenotypic_context(
     genus = pathogen_name.split()[0]
     for antibiotic in antibiotics:
         result = session.execute(PHENOTYPIC_QUERY, {
-            "pathogen_pattern": f"%{genus}%",
-            "antibiotic_pattern": f"%{antibiotic}%",
+            "pathogen_pattern": "%" + genus + "%",
+            "antibiotic_pattern": "%" + antibiotic + "%",
             "country_iso3": country_iso3,
         })
         for row in result:
@@ -336,29 +369,29 @@ def classify_confidence(country_iso3: str, gap: str) -> tuple[str, str]:
     if country_iso3 in SURVEILLANCE_GAP_COUNTRIES and gap == "absent":
         return (
             "LOW",
-            f"{country_iso3} has independent AMR surveillance (CDC/NHSN, China AMR) "
-            f"not yet ingested by AMR-Sentinel. Absence of phenotypic data here reflects "
-            f"a source gap, not confirmed pre-phenotypic status. Validate against national reports."
+            country_iso3 + " has independent AMR surveillance (CDC/NHSN, China AMR) "
+            "not yet ingested by AMR-Sentinel. Absence of phenotypic data here reflects "
+            "a source gap, not confirmed pre-phenotypic status. Validate against national reports."
         )
     if country_iso3 in ECDC_COUNTRIES:
         if gap == "absent":
             return (
                 "HIGH",
-                f"{country_iso3} is covered by ECDC EARS-Net (ingested). "
-                f"Gene presence without phenotypic signal is a genuine surveillance gap."
+                country_iso3 + " is covered by ECDC EARS-Net (ingested). "
+                "Gene presence without phenotypic signal is a genuine surveillance gap."
             )
         return ("HIGH", "")
     if gap in ("very_low", "low"):
         return (
             "HIGH",
-            f"Phenotypic resistance is low ({gap.replace('_', ' ')}) — "
-            f"genomic spread suggests rates may rise before next reporting cycle."
+            "Phenotypic resistance is low (" + gap.replace("_", " ") + ") — "
+            "genomic spread suggests rates may rise before next reporting cycle."
         )
     return (
         "MEDIUM",
-        f"{country_iso3} has limited phenotypic surveillance coverage globally. "
-        f"Genomic detection without phenotypic data is plausible as a true "
-        f"pre-phenotypic signal but requires in-country validation."
+        country_iso3 + " has limited phenotypic surveillance coverage globally. "
+        "Genomic detection without phenotypic data is plausible as a true "
+        "pre-phenotypic signal but requires in-country validation."
     )
 
 
@@ -393,17 +426,15 @@ def score_signal(
     conf_score = {"HIGH": 10, "MEDIUM": 6, "LOW": 2}.get(surveillance_confidence, 4)
 
     # Convergence bonus: ECDC country + critical gene + phenotype appearing + fast growth
-    # This is the genuine "gene spreading before phenotype fully establishes" scenario —
-    # the most actionable early warning signal in the system.
     convergence_bonus = 0
     doubling = acceleration.get("doubling_time_years")
     is_ecdc = country_iso3 in ECDC_COUNTRIES
     phenotype_emerging = phenotypic_gap in ("very_low", "low")
     fast_doubling = doubling is not None and doubling <= 2.0
     if is_ecdc and gene_tier == 1 and phenotype_emerging:
-        convergence_bonus = 8   # ECDC + critical gene + phenotype starting = high value
+        convergence_bonus = 8
         if fast_doubling:
-            convergence_bonus = 12  # fast doubling makes it urgent
+            convergence_bonus = 12
 
     return min(100, tier_score + gap_score + count_score + accel_score + conf_score + convergence_bonus)
 
@@ -411,26 +442,26 @@ def score_signal(
 def build_summary(signal: PrecursorSignal) -> str:
     """Build one-paragraph intelligence narrative for the signal."""
     ts = signal.time_series
-    years_str = ", ".join(f"{y}: {ts[y]:,}" for y in sorted(ts.keys())[-4:])
+    years_str = ", ".join(str(y) + ": " + str(ts[y]) for y in sorted(ts.keys())[-4:])
 
     accel_str = ""
     if signal.doubling_time_years:
         accel_str = (
-            f" The isolate count is doubling approximately every "
-            f"{signal.doubling_time_years:.1f} year(s)."
+            " The isolate count is doubling approximately every "
+            + str(signal.doubling_time_years) + " year(s)."
         )
 
     threshold_str = ""
     if signal.days_to_threshold:
         est = datetime.now(timezone.utc) + timedelta(days=signal.days_to_threshold)
         threshold_str = (
-            f" At current trajectory, isolate counts are projected to reach "
-            f"{FORECAST_THRESHOLD:,} by approximately {est.strftime('%B %Y')}."
+            " At current trajectory, isolate counts are projected to reach "
+            + str(FORECAST_THRESHOLD) + " by approximately " + est.strftime("%B %Y") + "."
         )
 
     phenotypic_str = (
-        f"Phenotypic {signal.drug_class.lower()} resistance in {signal.country_iso3}: "
-        + (f"{signal.phenotypic_rate * 100:.1f}% ({signal.phenotypic_source})."
+        "Phenotypic " + signal.drug_class.lower() + " resistance in " + signal.country_iso3 + ": "
+        + (str(round(signal.phenotypic_rate * 100, 1)) + "% (" + signal.phenotypic_source + ")."
            if signal.phenotypic_rate is not None
            else "no data in AMR-Sentinel sources.")
     )
@@ -438,19 +469,19 @@ def build_summary(signal: PrecursorSignal) -> str:
     spread_str = ""
     if signal.spread_risk_countries:
         spread_str = (
-            f" Epidemiological linkages suggest spread risk to: "
-            f"{', '.join(signal.spread_risk_countries)}."
+            " Epidemiological linkages suggest spread risk to: "
+            + ", ".join(signal.spread_risk_countries) + "."
         )
 
-    caveat_str = f" {signal.surveillance_caveat}" if signal.surveillance_caveat else ""
+    caveat_str = " " + signal.surveillance_caveat if signal.surveillance_caveat else ""
 
     return (
-        f"GENOMIC PRECURSOR [{signal.surveillance_confidence} confidence]: "
-        f"{signal.gene_name} detected in {signal.pathogen_name} isolates in "
-        f"{signal.country_iso3}. Recent trajectory (isolates/year): {years_str}."
-        f"{accel_str}{threshold_str} "
-        f"{phenotypic_str}{spread_str} "
-        f"{signal.gene_description}.{caveat_str}"
+        "GENOMIC PRECURSOR [" + signal.surveillance_confidence + " confidence]: "
+        + signal.gene_name + " detected in " + signal.pathogen_name + " isolates in "
+        + signal.country_iso3 + ". Recent trajectory (isolates/year): " + years_str + "."
+        + accel_str + threshold_str + " "
+        + phenotypic_str + spread_str + " "
+        + signal.gene_description + "." + caveat_str
     ).strip()
 
 
@@ -470,6 +501,10 @@ def run_detector(
     Queries both genomic_signals and resistance_records, computes multi-year
     acceleration, classifies phenotypic gaps, scores signals, and returns
     ranked PrecursorSignal objects.
+
+    Each signal is assigned a deterministic UUID from its natural key
+    (gene_name, pathogen_name, country_iso3) so the alert writer can
+    upsert rather than blind-insert, preventing duplication across runs.
 
     Args:
         min_score: Minimum score to include (default 40)
@@ -542,6 +577,11 @@ def run_detector(
 
             spread_countries = EPIGEOGRAPHIC_LINKS.get(country_iso3, [])
 
+            # Deterministic UUID — stable across pipeline re-runs for this triplet.
+            # The alert writer uses this to upsert (ON CONFLICT DO UPDATE) rather
+            # than inserting a duplicate row each time the pipeline fires.
+            signal_id = _deterministic_signal_id(gene_name, pathogen_name, country_iso3)
+
             signal = PrecursorSignal(
                 gene_name=gene_name,
                 gene_family=gene_family,
@@ -564,6 +604,7 @@ def run_detector(
                 who_priority=gene_info["who"],
                 gene_description=gene_info["desc"],
                 spread_risk_countries=spread_countries,
+                signal_id=signal_id,
             )
             signal.intelligence_summary = build_summary(signal)
             signals.append(signal)
@@ -605,34 +646,36 @@ def print_summary(signals: list[PrecursorSignal]) -> None:
     """Print readable summary of precursor signals."""
     conf_icon = {"HIGH": "●", "MEDIUM": "◐", "LOW": "○"}
 
-    print(f"\n{'='*75}")
-    print(f"GENOMIC PRECURSOR SIGNALS  —  {len(signals)} detected")
+    print("\n" + "=" * 75)
+    print("GENOMIC PRECURSOR SIGNALS  —  " + str(len(signals)) + " detected")
     print("  ● HIGH confidence   ◐ MEDIUM (limited surveillance)   ○ LOW (source gap)")
-    print(f"{'='*75}")
+    print("=" * 75)
 
     for s in signals:
         icon = conf_icon.get(s.surveillance_confidence, "?")
-        doubling = f"  2x/{s.doubling_time_years:.1f}yr" if s.doubling_time_years else ""
-        threshold = f"  →{FORECAST_THRESHOLD} in {s.days_to_threshold}d" if s.days_to_threshold else ""
+        doubling = ("  2x/" + str(s.doubling_time_years) + "yr") if s.doubling_time_years else ""
+        threshold = ("  ->" + str(FORECAST_THRESHOLD) + " in " + str(s.days_to_threshold) + "d") if s.days_to_threshold else ""
 
         ts_sorted = sorted(s.time_series.items())[-4:]
-        spark = "  ".join(f"{y}: {c:,}" for y, c in ts_sorted)
+        spark = "  ".join(str(y) + ": " + str(c) for y, c in ts_sorted)
 
         pheno = (
-            f"phenotypic {s.phenotypic_rate*100:.0f}%"
+            "phenotypic " + str(round(s.phenotypic_rate * 100, 0)) + "%"
             if s.phenotypic_rate is not None
             else "NO PHENOTYPIC DATA"
         )
-        spread = f"  → spread risk: {', '.join(s.spread_risk_countries)}" if s.spread_risk_countries else ""
+        spread = ("  -> spread risk: " + ", ".join(s.spread_risk_countries)) if s.spread_risk_countries else ""
 
         print(
-            f"\n  [{s.severity_score:3d}] {icon} {s.gene_name:<18} "
-            f"{s.pathogen_name[:24]:<24} {s.country_iso3}{doubling}{threshold}"
+            "\n  [" + str(s.severity_score).rjust(3) + "] " + icon + " "
+            + s.gene_name.ljust(18) + " "
+            + s.pathogen_name[:24].ljust(24) + " "
+            + s.country_iso3 + doubling + threshold
         )
-        print(f"        Trajectory: {spark}")
-        print(f"        {pheno}{spread}")
+        print("        Trajectory: " + spark)
+        print("        " + pheno + spread)
 
-    print(f"\n  Full report: {REPORT_PATH}")
+    print("\n  Full report: " + str(REPORT_PATH))
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +702,6 @@ if __name__ == "__main__":
     focus = {args.country} if args.country else None
 
     if args.high_confidence_only:
-        # Run without top_n to avoid cutting HIGH confidence signals
         signals = run_detector(min_score=args.min_score, focus_countries=focus)
         signals = [s for s in signals if s.surveillance_confidence == "HIGH"]
         if args.top:
