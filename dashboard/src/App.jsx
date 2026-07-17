@@ -853,14 +853,14 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
 
   const tabCounts = {
     all:      alerts.length,
-    critical: alerts.filter(a=>a.severity_tier==="critical").length,
-    high:     alerts.filter(a=>a.severity_tier==="warn").length,
-    watch:    alerts.filter(a=>a.severity_tier==="monitor").length,
+    critical: alerts.filter(a=>a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor").length,
+    high:     alerts.filter(a=>a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor").length,
+    watch:    alerts.filter(a=>a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor").length,
     genomic:  alerts.filter(a=>a.signal_type==="genomic_precursor").length,
   };
 
   const filtered = alerts
-    .filter(a => tab==="all" || (tab==="critical"&&a.severity_tier==="critical") || (tab==="high"&&a.severity_tier==="warn") || (tab==="watch"&&a.severity_tier==="monitor") || (tab==="genomic"&&a.signal_type==="genomic_precursor"))
+    .filter(a => tab==="all" || (tab==="critical"&&a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor") || (tab==="high"&&a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor") || (tab==="watch"&&a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor") || (tab==="genomic"&&a.signal_type==="genomic_precursor"))
     .filter(a => !search || (a.pathogen_name||"").toLowerCase().includes(search.toLowerCase()) || (a.antibiotic_name||"").toLowerCase().includes(search.toLowerCase()) || (a.country_iso3||"").toLowerCase().includes(search.toLowerCase()) || (a.gene_name||"").toLowerCase().includes(search.toLowerCase()))
     .filter(a => filters.pathogen==="all" || a.pathogen_name===filters.pathogen)
     .filter(a => filters.antibiotic==="all" || a.antibiotic_name===filters.antibiotic)
