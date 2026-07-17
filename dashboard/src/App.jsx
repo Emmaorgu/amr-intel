@@ -882,14 +882,14 @@ function matchesTimeWindow(a, timeWindow) {
   return true;
 }
 
-function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
+function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeWindow }) {
   const [alerts,     setAlerts]     = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState("");
   const [tab,        setTab]        = useState(initialTab || "all");
   const [sortBy,     setSortBy]     = useState(initialSort || "severity_score");
   const [filters,    setFilters]    = useState({ pathogen:"all", antibiotic:"all", region:"all" });
-  const [timeWindow, setTimeWindow] = useState("all");
+  const [timeWindow, setTimeWindow] = useState(initialTimeWindow || "all");
 
   useEffect(() => {
     // Genomic alerts score lower than many phenotypic alerts, so a plain
@@ -910,21 +910,18 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
   // Time-windowed base — all subsequent filters operate on this slice.
   const timeFiltered = alerts.filter(a => matchesTimeWindow(a, timeWindow));
 
-  // Tab counts always reflect the FULL dataset — they show the total threat
-  // landscape regardless of the time window. The time window only narrows
-  // which rows appear in the table. This way "Critical (15)" always means
-  // "15 critical threats exist in the system" and doesn't drop to 0 when
-  // you select "Yesterday" just because that pipeline run happened at 02:00 UTC.
+  // Tab counts always use the FULL dataset regardless of time window —
+  // they show the total threat landscape. Time window only narrows table rows.
   const tabCounts = {
     all:      alerts.length,
-    critical: alerts.filter(a=>a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor").length,
-    high:     alerts.filter(a=>a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor").length,
-    watch:    alerts.filter(a=>a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor").length,
+    critical: alerts.filter(a=>a.severity_tier==="critical").length,
+    high:     alerts.filter(a=>a.severity_tier==="warn").length,
+    watch:    alerts.filter(a=>a.severity_tier==="monitor").length,
     genomic:  alerts.filter(a=>a.signal_type==="genomic_precursor").length,
   };
 
   const filtered = timeFiltered
-    .filter(a => tab==="all" || (tab==="critical"&&a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor") || (tab==="high"&&a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor") || (tab==="watch"&&a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor") || (tab==="genomic"&&a.signal_type==="genomic_precursor"))
+    .filter(a => tab==="all" || (tab==="critical"&&a.severity_tier==="critical") || (tab==="high"&&a.severity_tier==="warn") || (tab==="watch"&&a.severity_tier==="monitor") || (tab==="genomic"&&a.signal_type==="genomic_precursor"))
     .filter(a => !search || (a.pathogen_name||"").toLowerCase().includes(search.toLowerCase()) || (a.antibiotic_name||"").toLowerCase().includes(search.toLowerCase()) || (a.country_iso3||"").toLowerCase().includes(search.toLowerCase()) || (a.gene_name||"").toLowerCase().includes(search.toLowerCase()))
     .filter(a => filters.pathogen==="all" || a.pathogen_name===filters.pathogen)
     .filter(a => filters.antibiotic==="all" || a.antibiotic_name===filters.antibiotic)
@@ -2224,8 +2221,9 @@ export default function App() {
   const [mobOpen,     setMobOpen]     = useState(false);
   // Set when navigating into Threat Operations from a stat card that implies
   // a specific tab/sort (e.g. "Critical Alerts" → critical tab, newest first).
-  const [opInitialTab,  setOpInitialTab]  = useState("all");
-  const [opInitialSort, setOpInitialSort] = useState("severity_score");
+  const [opInitialTab,        setOpInitialTab]        = useState("all");
+  const [opInitialSort,       setOpInitialSort]       = useState("severity_score");
+  const [opInitialTimeWindow, setOpInitialTimeWindow] = useState("all");
 
   useEffect(() => {
     apiFetch("/stats").then(setStats);
@@ -2242,10 +2240,11 @@ export default function App() {
     setScreen("investigate");
   }, []);
 
-  // "Critical Alerts" stat card → Threat Operations, Critical tab, newest first.
+  // "New Today" stat card → Threat Operations, Critical tab, today filter, newest first.
   const handleViewCriticalToday = useCallback(() => {
     setOpInitialTab("critical");
     setOpInitialSort("created_at");
+    setOpInitialTimeWindow("today");
     setScreen("operations");
   }, []);
 
@@ -2290,7 +2289,7 @@ export default function App() {
           </div>
 
           {screen==="command"     && <CommandCenter      onInvestigate={handleInvestigate} setScreen={setScreen} onViewCriticalToday={handleViewCriticalToday}/>}
-          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate} initialTab={opInitialTab} initialSort={opInitialSort}/>}
+          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate} initialTab={opInitialTab} initialSort={opInitialSort} initialTimeWindow={opInitialTimeWindow}/>}
           {screen==="emergence"   && <EmergenceRadarScreen onInvestigate={handleInvestigate}/>}
           {screen==="genomic"     && <GenomicIntelligence onInvestigate={handleInvestigate}/>}
           {screen==="investigate" && <AlertInvestigation  alert={invAlert}/>}
