@@ -36,6 +36,24 @@ What it does:
              `stale_threshold` (default 2pp = 0.02)
        New triplets and triplets showing meaningful change always pass through.
 
+       PRODUCTION CAVEAT (found 2026-07-17): this suppression mechanism only
+       works when triage_state.json persists between runs. On GitHub Actions,
+       every scheduled run starts from a fresh repository checkout with no
+       memory of the previous day's state file, so `_is_stale()` never has
+       prior state to compare against — every triplet is treated as new on
+       every run. Combined with `alert_id` previously being a fresh random
+       UUID per run, this meant the same real-world signal (e.g. a
+       persistently critical Cyprus/Ciprofloxacin/K. pneumoniae alert) was
+       re-inserted as a "new" alert every single day, with observed
+       duplication of 15-22+ copies per signal in the live database. The fix
+       (see `_deterministic_alert_id`) makes `alert_id` a stable hash of the
+       triplet's identity, so alert_writer.py's UUID-based dedup on the
+       write side correctly recognises and skips repeats — independent of
+       whether triage_state.json persisted or not. The stale-suppression
+       logic above remains useful for local development runs where the state
+       file does persist, but is no longer the only thing standing between
+       production and duplicate alerts.
+
 Architecture:
     - TriageAgent is a stateful class that loads and saves alert state to a
       configurable JSON file between runs.
@@ -57,6 +75,7 @@ Outputs:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -436,6 +455,14 @@ class TriageAgent:
         New triplets (not in state) are never stale.
         Triplets where the resistance rate has meaningfully changed pass through.
 
+        NOTE: this only has an effect when self._state was loaded from a
+        state file that actually persisted from a previous run. On GitHub
+        Actions this is not the case (see module docstring) — every triplet
+        will report "new triplet" every run there. Duplicate prevention in
+        production is instead handled by `_deterministic_alert_id`, which
+        ensures alert_writer.py's UUID-based dedup catches the repeat even
+        when this suppression logic has no prior state to work from.
+
         Parameters
         ----------
         triplet_key : str
@@ -482,6 +509,54 @@ class TriageAgent:
             f"Available attributes: {[a for a in dir(signal) if not a.startswith('_')]}"
         )
 
+    @staticmethod
+    def _deterministic_alert_id(
+        pathogen_name: str, antibiotic_name: str, country_iso3: str
+    ) -> str:
+        """
+        Build a stable UUID from the alert's logical identity — the
+        (pathogen, antibiotic, country) triplet — independent of when or
+        how many times the pipeline has run.
+
+        Fixes a production duplication bug found 2026-07-17: alert_id was
+        previously `uuid.uuid4()`, a brand-new random ID on every run. Since
+        GitHub Actions checks out a fresh copy of the repo on every scheduled
+        run, triage_state.json never persists between days, so the
+        stale-suppression logic in `_is_stale()` never had prior state to
+        compare against — every triplet was treated as new every day. With a
+        random alert_id, alert_writer.py's UUID-based dedup on the write
+        side had no way to recognise the repeat either. The result: the same
+        real-world signal accumulated as 15-22+ duplicate rows in the live
+        alerts table over about three weeks of daily runs.
+
+        Making the ID a deterministic hash of the triplet's identity closes
+        this gap independently of whether local state persists: the same
+        signal always produces the same alert_id, so alert_writer.py
+        correctly skips it as an existing row on every subsequent run. This
+        mirrors the identical fix already applied to genomic precursor
+        alerts in genomic_precursor_pipeline.py.
+
+        Known tradeoff (accepted, consistent with the genomic fix): because
+        alert_writer.py skips on ID match rather than updating the existing
+        row, this alert's severity_score/current_resistance/created_at will
+        reflect whichever run first produced it, not later runs where the
+        underlying resistance rate may have moved further. Tracking how a
+        triplet's severity changes over time is the job of the planned
+        State Transition Tracker (roadmap Task 5), not this fix.
+
+        Args:
+            pathogen_name: Canonical pathogen name.
+            antibiotic_name: Canonical antibiotic name.
+            country_iso3: ISO3 country code.
+
+        Returns:
+            A UUID string, deterministically derived via MD5 of the
+            triplet's identity key. Not cryptographically secure — not
+            needed here, this is purely for stable deduplication.
+        """
+        key = f"triage|{pathogen_name}|{antibiotic_name}|{country_iso3}"
+        return str(uuid.UUID(hashlib.md5(key.encode("utf-8")).hexdigest()))
+
     def _build_alert(self, signal, tier: str, all_years: list[int]) -> Alert:
         """
         Construct an Alert object from a canonical ScoredSignal.
@@ -500,7 +575,9 @@ class TriageAgent:
         Alert
         """
         return Alert(
-            alert_id=str(uuid.uuid4()),
+            alert_id=self._deterministic_alert_id(
+                signal.pathogen_name, signal.antibiotic_name, signal.country_iso3
+            ),
             created_at=datetime.now(timezone.utc).isoformat(),
             pathogen_name=signal.pathogen_name,
             antibiotic_name=signal.antibiotic_name,
