@@ -725,9 +725,9 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
         <StatCard label="Avg Lead Time" value={avgMonths + "mo"} sub="vs official reports" accent={C.teal}/>
         <StatCard label="Signals Validated" value={stats?.validated_signals_count || 5} sub="outcome confirmed" accent={C.green}/>
         <StatCard
-          label="Critical Alerts"
-          value={stats?.critical_alerts || 0}
-          sub={(stats?.critical_alerts_today || 0) + " new today"}
+          label="New Today"
+          value={stats?.critical_alerts_today || 0}
+          sub={"of " + (stats?.critical_alerts || 0) + " critical total"}
           accent={C.red}
           onClick={() => onViewCriticalToday && onViewCriticalToday()}
         />
@@ -910,13 +910,17 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
   // Time-windowed base — all subsequent filters operate on this slice.
   const timeFiltered = alerts.filter(a => matchesTimeWindow(a, timeWindow));
 
-  // Tab counts reflect the selected time window so numbers stay consistent.
+  // Tab counts always reflect the FULL dataset — they show the total threat
+  // landscape regardless of the time window. The time window only narrows
+  // which rows appear in the table. This way "Critical (15)" always means
+  // "15 critical threats exist in the system" and doesn't drop to 0 when
+  // you select "Yesterday" just because that pipeline run happened at 02:00 UTC.
   const tabCounts = {
-    all:      timeFiltered.length,
-    critical: timeFiltered.filter(a=>a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor").length,
-    high:     timeFiltered.filter(a=>a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor").length,
-    watch:    timeFiltered.filter(a=>a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor").length,
-    genomic:  timeFiltered.filter(a=>a.signal_type==="genomic_precursor").length,
+    all:      alerts.length,
+    critical: alerts.filter(a=>a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor").length,
+    high:     alerts.filter(a=>a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor").length,
+    watch:    alerts.filter(a=>a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor").length,
+    genomic:  alerts.filter(a=>a.signal_type==="genomic_precursor").length,
   };
 
   const filtered = timeFiltered
