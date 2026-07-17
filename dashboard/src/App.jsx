@@ -827,21 +827,76 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
 }
 
 // ─── Screen 2: Threat Operations ─────────────────────────────────────────────
+// Build time-window options dynamically from the alert set.
+// Returns [{value, label}] — fixed windows first, then distinct months
+// derived from the alerts' created_at timestamps (most recent first).
+function buildTimeOptions(alerts) {
+  var opts = [
+    {value:"all",    label:"All Time"},
+    {value:"today",  label:"Today"},
+    {value:"yesterday", label:"Yesterday"},
+    {value:"week",   label:"This Week"},
+    {value:"month",  label:"This Month"},
+  ];
+  // Collect distinct YYYY-MM months present in the data
+  var seen = {};
+  alerts.forEach(function(a) {
+    if (!a.created_at) return;
+    var d = new Date(a.created_at);
+    var key = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+    if (!seen[key]) {
+      seen[key] = d.toLocaleDateString("en-GB",{month:"long",year:"numeric"});
+    }
+  });
+  // Sort months descending
+  Object.keys(seen).sort().reverse().forEach(function(k) {
+    opts.push({value:"m:" + k, label:seen[k]});
+  });
+  return opts;
+}
+
+// Returns true if alert.created_at falls within the selected time window.
+function matchesTimeWindow(a, timeWindow) {
+  if (timeWindow === "all") return true;
+  if (!a.created_at) return false;
+  var now = new Date();
+  var d   = new Date(a.created_at);
+  if (timeWindow === "today") {
+    return d.toDateString() === now.toDateString();
+  }
+  if (timeWindow === "yesterday") {
+    var yest = new Date(now); yest.setDate(now.getDate()-1);
+    return d.toDateString() === yest.toDateString();
+  }
+  if (timeWindow === "week") {
+    var weekAgo = new Date(now); weekAgo.setDate(now.getDate()-7);
+    return d >= weekAgo;
+  }
+  if (timeWindow === "month") {
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }
+  if (timeWindow.startsWith("m:")) {
+    var parts = timeWindow.slice(2).split("-");
+    return d.getFullYear() === parseInt(parts[0]) && (d.getMonth()+1) === parseInt(parts[1]);
+  }
+  return true;
+}
+
 function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
-  const [alerts,  setAlerts]  = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search,  setSearch]  = useState("");
-  const [tab,     setTab]     = useState(initialTab || "all");
-  const [sortBy,  setSortBy]  = useState(initialSort || "severity_score");
-  const [filters, setFilters] = useState({ pathogen:"all", antibiotic:"all", region:"all" });
+  const [alerts,     setAlerts]     = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [search,     setSearch]     = useState("");
+  const [tab,        setTab]        = useState(initialTab || "all");
+  const [sortBy,     setSortBy]     = useState(initialSort || "severity_score");
+  const [filters,    setFilters]    = useState({ pathogen:"all", antibiotic:"all", region:"all" });
+  const [timeWindow, setTimeWindow] = useState("all");
 
   useEffect(() => {
-    // Same fix as CommandCenter: genomic alerts score lower than many
-    // phenotypic alerts, so a plain top-200-by-severity fetch excludes them.
-    // Fetch the genomic slice explicitly and merge it in.
+    // Genomic alerts score lower than many phenotypic alerts, so a plain
+    // top-200-by-severity fetch excludes them. Fetch explicitly and merge.
     Promise.all([
-      apiFetch("/alerts?page_size=200&sort_by=severity_score"),
-      apiFetch("/alerts?signal_type=genomic_precursor&page_size=200&sort_by=severity_score"),
+      apiFetch("/alerts?page_size=500&sort_by=severity_score"),
+      apiFetch("/alerts?signal_type=genomic_precursor&page_size=500&sort_by=severity_score"),
     ]).then(([data, genomicData]) => {
       setAlerts([...(data?.alerts || []), ...(genomicData?.alerts || [])]);
       setLoading(false);
@@ -850,16 +905,21 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
 
   const pathogens   = [...new Set(alerts.map(a => a.pathogen_name).filter(Boolean))].sort();
   const antibiotics = [...new Set(alerts.map(a => a.antibiotic_name).filter(Boolean))].sort();
+  const timeOptions = buildTimeOptions(alerts);
 
+  // Time-windowed base — all subsequent filters operate on this slice.
+  const timeFiltered = alerts.filter(a => matchesTimeWindow(a, timeWindow));
+
+  // Tab counts reflect the selected time window so numbers stay consistent.
   const tabCounts = {
-    all:      alerts.length,
-    critical: alerts.filter(a=>a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor").length,
-    high:     alerts.filter(a=>a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor").length,
-    watch:    alerts.filter(a=>a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor").length,
-    genomic:  alerts.filter(a=>a.signal_type==="genomic_precursor").length,
+    all:      timeFiltered.length,
+    critical: timeFiltered.filter(a=>a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor").length,
+    high:     timeFiltered.filter(a=>a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor").length,
+    watch:    timeFiltered.filter(a=>a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor").length,
+    genomic:  timeFiltered.filter(a=>a.signal_type==="genomic_precursor").length,
   };
 
-  const filtered = alerts
+  const filtered = timeFiltered
     .filter(a => tab==="all" || (tab==="critical"&&a.severity_tier==="critical"&&a.signal_type!=="genomic_precursor") || (tab==="high"&&a.severity_tier==="warn"&&a.signal_type!=="genomic_precursor") || (tab==="watch"&&a.severity_tier==="monitor"&&a.signal_type!=="genomic_precursor") || (tab==="genomic"&&a.signal_type==="genomic_precursor"))
     .filter(a => !search || (a.pathogen_name||"").toLowerCase().includes(search.toLowerCase()) || (a.antibiotic_name||"").toLowerCase().includes(search.toLowerCase()) || (a.country_iso3||"").toLowerCase().includes(search.toLowerCase()) || (a.gene_name||"").toLowerCase().includes(search.toLowerCase()))
     .filter(a => filters.pathogen==="all" || a.pathogen_name===filters.pathogen)
@@ -902,6 +962,12 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
           <option value="EMRO">E. Mediterranean</option>
           <option value="SEARO">SE Asia</option>
         </select>
+        {/* Time window selector — fixed windows + dynamic month options */}
+        <select value={timeWindow} onChange={e=>setTimeWindow(e.target.value)} style={{...selStyle,color:timeWindow!=="all"?C.teal:C.mutedHigh,borderColor:timeWindow!=="all"?C.teal+"60":C.border}}>
+          {timeOptions.map(o=>(
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
         <div style={{marginLeft:"auto",display:"flex",gap:6,fontSize:11,color:C.muted,alignItems:"center"}}>
           Sort:
           {["severity_score","current_resistance","created_at"].map(s=>(
@@ -918,7 +984,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort }) {
           {id:"critical",label:"Critical (" + tabCounts.critical + ")"},
           {id:"high",label:"High (" + tabCounts.high + ")"},
           {id:"watch",label:"Watch (" + tabCounts.watch + ")"},
-          {id:"genomic",label:"🧬 Genomic (" + tabCounts.genomic + ")"},
+          {id:"genomic",label:"\uD83E\uDDEC Genomic (" + tabCounts.genomic + ")"},
         ].map(t => (
           <button key={t.id} onClick={()=>setTab(t.id)} style={{
             padding:"8px 16px",background:"none",border:"none",
