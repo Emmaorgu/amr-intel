@@ -38,6 +38,52 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-render.txt
 
+      # Clear stale pipeline state before each run so the triage agent
+      # re-evaluates all signals fresh and output_queue.jsonl starts empty.
+      # Without this, output_queue.jsonl accumulates across runs and the
+      # triage agent suppresses re-detection of previously seen signals.
+      - name: Clear stale pipeline state
+        run: |
+          echo "Clearing stale triage state and output queue..."
+          mkdir -p data/alerts
+          rm -f data/alerts/triage_state.json
+          rm -f data/alerts/output_queue.jsonl
+          echo "Cleared."
+
+      # Delete existing phenotypic alerts from DB so today's run replaces
+      # yesterday's detections rather than skipping them as already-seen UUIDs.
+      # Genomic precursor alerts are NOT deleted — they upsert in place.
+      # Signal validations and feedback are NOT deleted — they are permanent records.
+      - name: Rotate phenotypic alerts in DB
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: "5432"
+          DB_NAME: amr_sentinel
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          echo "Deleting phenotypic alerts from previous pipeline runs..."
+          python - <<'PYEOF'
+          import os, psycopg2
+          conn = psycopg2.connect(
+              host=os.environ["DB_HOST"],
+              port=os.environ["DB_PORT"],
+              dbname=os.environ["DB_NAME"],
+              user=os.environ["DB_USER"],
+              password=os.environ["DB_PASSWORD"],
+              sslmode="require",
+          )
+          cur = conn.cursor()
+          cur.execute(
+              "DELETE FROM alerts WHERE signal_type != 'genomic_precursor'"
+          )
+          deleted = cur.rowcount
+          conn.commit()
+          cur.close()
+          conn.close()
+          print(f"Deleted {deleted} phenotypic alerts. Genomic precursors retained.")
+          PYEOF
+
       # NDARO runs Sundays only OR when manually triggered with run_ndaro=true
       - name: Run NDARO genomic ingestion
         if: github.event.schedule == '0 1 * * 0' || github.event.inputs.run_ndaro == 'true'
