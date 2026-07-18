@@ -167,8 +167,11 @@ def write_alerts_from_queue(
     """
     Read output_queue.jsonl and write each alert to the PostgreSQL alerts table.
 
-    Phenotypic alerts (trajectory_deviation, rate_spike) are skipped if their
-    UUID already exists in the DB — they are immutable once written.
+    Phenotypic alerts (trajectory_deviation, rate_spike) use ON CONFLICT DO NOTHING
+    on both the primary key and the daily uniqueness constraint
+    (uq_phenotypic_alert_daily). First insert per triplet per UTC day wins;
+    all subsequent inserts that day are silently skipped. This makes pipeline
+    re-runs safe while preserving the daily surveillance log as the moat.
 
     Genomic precursor alerts are UPSERTED — inserted on first run, and on
     subsequent runs the severity_score, severity_tier, and extra_data are
@@ -243,15 +246,23 @@ def write_alerts_from_queue(
                         logger.debug("Genomic alert %s inserted (new).", values["id"])
 
                 else:
-                    # Phenotypic alerts: skip if already in DB (immutable)
+                    # Phenotypic alerts: ON CONFLICT DO NOTHING on both the
+                    # primary key (id) and the daily uniqueness constraint
+                    # (uq_phenotypic_alert_daily). This means:
+                    # - Same UUID same day → silently skipped (PK conflict)
+                    # - Different UUID same triplet same day → silently skipped
+                    #   (daily uniqueness constraint conflict)
+                    # Pipeline re-runs are always safe — first insert wins.
+                    stmt = (
+                        pg_insert(Alert)
+                        .values(**values)
+                        .on_conflict_do_nothing()
+                    )
+                    result = session.execute(stmt)
                     if values["id"] in existing_ids:
-                        logger.debug("Alert %s already exists — skipping.", values["id"])
                         skipped += 1
-                        continue
-
-                    alert_obj = Alert(**values)
-                    session.add(alert_obj)
-                    inserted += 1
+                    else:
+                        inserted += 1
 
             except json.JSONDecodeError as exc:
                 logger.error("Line %d: JSON parse error — %s", i, exc)
