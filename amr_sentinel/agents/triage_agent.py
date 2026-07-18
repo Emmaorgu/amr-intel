@@ -514,35 +514,24 @@ class TriageAgent:
         pathogen_name: str, antibiotic_name: str, country_iso3: str
     ) -> str:
         """
-        Build a stable UUID from the alert's logical identity — the
-        (pathogen, antibiotic, country) triplet — independent of when or
-        how many times the pipeline has run.
+        Build a date-scoped deterministic UUID from (pathogen, antibiotic,
+        country, UTC-date). Stable within a calendar day, unique across days.
 
-        Fixes a production duplication bug found 2026-07-17: alert_id was
-        previously `uuid.uuid4()`, a brand-new random ID on every run. Since
-        GitHub Actions checks out a fresh copy of the repo on every scheduled
-        run, triage_state.json never persists between days, so the
-        stale-suppression logic in `_is_stale()` never had prior state to
-        compare against — every triplet was treated as new every day. With a
-        random alert_id, alert_writer.py's UUID-based dedup on the write
-        side had no way to recognise the repeat either. The result: the same
-        real-world signal accumulated as 15-22+ duplicate rows in the live
-        alerts table over about three weeks of daily runs.
+        WHY DATE-SCOPED:
+        The alerts table is the platform moat — a permanent surveillance log
+        that compounds in value over time. Each daily pipeline run must
+        produce a fresh row per triplet so the history accumulates. "K.
+        pneumoniae / Imipenem / BGR on 2026-07-18" is a distinct intelligence
+        record from the same triplet on 2026-07-19 — different resistance
+        rates, scores, and trend states. Without a date component, the UUID
+        never changes and alert_writer.py skips every subsequent detection as
+        "already exists", freezing the DB at the first run's 50 alerts.
 
-        Making the ID a deterministic hash of the triplet's identity closes
-        this gap independently of whether local state persists: the same
-        signal always produces the same alert_id, so alert_writer.py
-        correctly skips it as an existing row on every subsequent run. This
-        mirrors the identical fix already applied to genomic precursor
-        alerts in genomic_precursor_pipeline.py.
-
-        Known tradeoff (accepted, consistent with the genomic fix): because
-        alert_writer.py skips on ID match rather than updating the existing
-        row, this alert's severity_score/current_resistance/created_at will
-        reflect whichever run first produced it, not later runs where the
-        underlying resistance rate may have moved further. Tracking how a
-        triplet's severity changes over time is the job of the planned
-        State Transition Tracker (roadmap Task 5), not this fix.
+        WHY STILL DETERMINISTIC (not random):
+        Within a single day, multiple pipeline triggers (manual reruns, the
+        scheduled 02:00 UTC run) must not produce duplicate rows for the same
+        triplet. The date-scoped key guarantees exactly one row per triplet
+        per UTC day regardless of run count.
 
         Args:
             pathogen_name: Canonical pathogen name.
@@ -550,11 +539,11 @@ class TriageAgent:
             country_iso3: ISO3 country code.
 
         Returns:
-            A UUID string, deterministically derived via MD5 of the
-            triplet's identity key. Not cryptographically secure — not
-            needed here, this is purely for stable deduplication.
+            UUID string derived from triplet + today's UTC date via MD5.
+            Unique per day, stable within a day.
         """
-        key = f"triage|{pathogen_name}|{antibiotic_name}|{country_iso3}"
+        utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        key = f"triage|{pathogen_name}|{antibiotic_name}|{country_iso3}|{utc_date}"
         return str(uuid.UUID(hashlib.md5(key.encode("utf-8")).hexdigest()))
 
     def _build_alert(self, signal, tier: str, all_years: list[int]) -> Alert:
