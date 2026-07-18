@@ -218,29 +218,20 @@ def write_alerts_from_queue(
                 values = _parse_alert_row(row)
 
                 if signal_type == "genomic_precursor":
-                    # UPSERT: on conflict (same deterministic UUID), update the
-                    # mutable intelligence fields. created_at is excluded so the
-                    # original detection timestamp is preserved.
+                    # ON CONFLICT DO NOTHING on both the primary key (id) and
+                    # the triplet uniqueness constraint (uq_genomic_precursor_triplet).
+                    # One genomic precursor per (pathogen, antibiotic, country) forever.
+                    # UUID mismatches across runs no longer cause duplication —
+                    # the constraint catches them regardless of what UUID was generated.
                     stmt = (
                         pg_insert(Alert)
                         .values(**values)
-                        .on_conflict_do_update(
-                            index_elements=["id"],
-                            set_={
-                                "severity_score": values["severity_score"],
-                                "severity_tier": values["severity_tier"],
-                                "extra_data": values["extra_data"],
-                                "pipeline_run_id": values["pipeline_run_id"],
-                            },
-                        )
+                        .on_conflict_do_nothing()
                     )
                     result = session.execute(stmt)
-                    # rowcount=1 on insert, 0 on no-op update (unchanged row),
-                    # but pg_insert always returns 1 for DO UPDATE — distinguish
-                    # via whether ID was already in existing_ids.
                     if values["id"] in existing_ids:
                         upserted += 1
-                        logger.debug("Genomic alert %s upserted (updated).", values["id"])
+                        logger.debug("Genomic alert %s already exists — skipped.", values["id"])
                     else:
                         inserted += 1
                         logger.debug("Genomic alert %s inserted (new).", values["id"])
