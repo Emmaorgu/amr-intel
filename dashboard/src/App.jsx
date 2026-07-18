@@ -725,9 +725,9 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
         <StatCard label="Avg Lead Time" value={avgMonths + "mo"} sub="vs official reports" accent={C.teal}/>
         <StatCard label="Signals Validated" value={stats?.validated_signals_count || 5} sub="outcome confirmed" accent={C.green}/>
         <StatCard
-          label="New Today"
-          value={stats?.critical_alerts_today || 0}
-          sub={"of " + (stats?.critical_alerts || 0) + " critical total"}
+          label="Critical Alerts"
+          value={stats?.critical_alerts || 0}
+          sub={"across " + (stats?.countries_monitored || 0) + " countries"}
           accent={C.red}
           onClick={() => onViewCriticalToday && onViewCriticalToday()}
         />
