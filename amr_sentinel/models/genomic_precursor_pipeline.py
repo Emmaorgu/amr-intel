@@ -85,7 +85,7 @@ def _deterministic_alert_id(signal) -> str:
 
     Args:
         signal: PrecursorSignal dataclass instance. Must expose
-            gene_name, pathogen_name, country_iso3, and latest_year.
+            gene_name, pathogen_name, country_iso3 (NOT latest_year — must stay stable across NDARO updates).
 
     Returns:
         A UUID string, deterministically derived via MD5 of the signal's
@@ -94,7 +94,7 @@ def _deterministic_alert_id(signal) -> str:
     """
     key = (
         f"genomic|{signal.gene_name}|{signal.pathogen_name}|"
-        f"{signal.country_iso3}|{signal.latest_year}"
+        f"{signal.country_iso3}"
     )
     return str(uuid.UUID(hashlib.md5(key.encode("utf-8")).hexdigest()))
 
