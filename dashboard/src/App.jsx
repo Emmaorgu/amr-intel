@@ -903,23 +903,28 @@ function matchesTimeWindow(a, timeWindow) {
   if (!a.created_at) return false;
   var now = new Date();
   var d   = new Date(a.created_at);
+  // Compare in UTC so pipeline timestamps (stored in UTC) match correctly
+  // regardless of viewer timezone. A 02:00 UTC run on Jul 20 is "today"
+  // in UTC, which is the canonical reference for server-generated timestamps.
+  var nowY = now.getUTCFullYear(), nowM = now.getUTCMonth(), nowD = now.getUTCDate();
+  var dY   = d.getUTCFullYear(),   dM   = d.getUTCMonth(),   dDay = d.getUTCDate();
   if (timeWindow === "today") {
-    return d.toDateString() === now.toDateString();
+    return dY === nowY && dM === nowM && dDay === nowD;
   }
   if (timeWindow === "yesterday") {
-    var yest = new Date(now); yest.setDate(now.getDate()-1);
-    return d.toDateString() === yest.toDateString();
+    var yest = new Date(Date.UTC(nowY, nowM, nowD - 1));
+    return dY === yest.getUTCFullYear() && dM === yest.getUTCMonth() && dDay === yest.getUTCDate();
   }
   if (timeWindow === "week") {
-    var weekAgo = new Date(now); weekAgo.setDate(now.getDate()-7);
+    var weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     return d >= weekAgo;
   }
   if (timeWindow === "month") {
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    return dY === nowY && dM === nowM;
   }
   if (timeWindow.startsWith("m:")) {
     var parts = timeWindow.slice(2).split("-");
-    return d.getFullYear() === parseInt(parts[0]) && (d.getMonth()+1) === parseInt(parts[1]);
+    return dY === parseInt(parts[0]) && (dM + 1) === parseInt(parts[1]);
   }
   return true;
 }
