@@ -172,8 +172,9 @@ class PrecursorSignal:
     phenotypic_gap: str
     phenotypic_source: Optional[str]
 
-    surveillance_confidence: str
+    surveillance_confidence: str  # legacy field — kept for backward compat
     surveillance_caveat: str
+    precursor_tier: str = ""  # Tier 1/2/3 or Surveillance Gap — ECDC/WHO language
 
     severity_score: int
     drug_class: str
@@ -364,34 +365,118 @@ def classify_gap(rate: Optional[float]) -> str:
     return "established"
 
 
-def classify_confidence(country_iso3: str, gap: str) -> tuple[str, str]:
-    """Return (confidence_label, caveat_text) based on surveillance coverage."""
+# Tier labels — scientifically defensible, matching ECDC/WHO terminology
+PRECURSOR_TIER_1 = "Tier 1 — Confirmed Precursor"
+PRECURSOR_TIER_2 = "Tier 2 — Candidate Precursor"
+PRECURSOR_TIER_3 = "Tier 3 — Established Resistance"
+PRECURSOR_TIER_GAP = "Surveillance Gap"
+
+
+def classify_precursor_tier(
+    country_iso3: str,
+    gap: str,
+    acceleration: dict,
+    gene_tier: int,
+) -> tuple[str, str]:
+    """
+    Classify a genomic precursor signal into a scientifically defensible tier.
+
+    Replaces the HIGH/MEDIUM/LOW confidence labels which are internally
+    meaningful but not scientifically defensible for external presentation
+    to clinicians, public health authorities, or acquirers. Tier language
+    maps to ECDC/WHO framework for signal classification.
+
+    Tier 1 — Confirmed Precursor:
+        The strongest signal. Requires all three:
+        (a) Ingested phenotypic surveillance confirming low/very_low resistance
+            (so absence is real, not a data gap)
+        (b) Genomic trend showing growing isolate counts
+        (c) Priority gene (tier 1 = carbapenem/colistin resistance)
+        Clinical meaning: resistance gene is spreading in a country with confirmed
+        low phenotypic resistance — a genuine pre-phenotypic emergence window.
+
+    Tier 2 — Candidate Precursor:
+        Gene is growing in a country without phenotypic coverage in our sources.
+        Signal is real but pre-phenotypic status is inferred, not confirmed.
+        Requires in-country validation before clinical action.
+
+    Tier 3 — Established Resistance:
+        Both genomic and phenotypic evidence are high. Gene is present AND
+        resistance is already established. Not a precursor — a confirmation
+        of known resistance. Lower operational priority for early warning.
+
+    Surveillance Gap:
+        Country has strong independent surveillance (CDC/NHSN, China AMR) not
+        yet ingested. Cannot distinguish pre-phenotypic from data gap. Flag
+        for manual validation against national reports.
+
+    Args:
+        country_iso3: ISO3 country code
+        gap: phenotypic gap classification (absent/very_low/low/established)
+        acceleration: dict from compute_acceleration()
+        gene_tier: 1 (critical priority) or 2 (high priority)
+
+    Returns:
+        Tuple of (tier_label, caveat_text)
+    """
+    trend = acceleration.get("trend", "insufficient_data")
+    genomic_growing = trend in ("growing", "stable")
+
+    # Surveillance Gap — cannot confirm pre-phenotypic status
     if country_iso3 in SURVEILLANCE_GAP_COUNTRIES and gap == "absent":
         return (
-            "LOW",
+            PRECURSOR_TIER_GAP,
             country_iso3 + " has independent AMR surveillance (CDC/NHSN, China AMR) "
-            "not yet ingested by AMR-Sentinel. Absence of phenotypic data here reflects "
-            "a source gap, not confirmed pre-phenotypic status. Validate against national reports."
+            "not yet ingested by AMR-Intel. Cannot distinguish pre-phenotypic status "
+            "from source gap. Validate against national surveillance reports."
         )
-    if country_iso3 in ECDC_COUNTRIES:
-        if gap == "absent":
-            return (
-                "HIGH",
-                country_iso3 + " is covered by ECDC EARS-Net (ingested). "
-                "Gene presence without phenotypic signal is a genuine surveillance gap."
-            )
-        return ("HIGH", "")
-    if gap in ("very_low", "low"):
+
+    # Tier 3 — Established Resistance (both signals present and high)
+    if gap == "established":
         return (
-            "HIGH",
-            "Phenotypic resistance is low (" + gap.replace("_", " ") + ") — "
-            "genomic spread suggests rates may rise before next reporting cycle."
+            PRECURSOR_TIER_3,
+            "Phenotypic " + gap + " resistance is already established in this country. "
+            "Gene presence confirms ongoing resistance — not a pre-phenotypic signal."
         )
+
+    # Tier 1 — Confirmed Precursor (strongest signal)
+    # Requires: ingested phenotypic data (low/very_low) + genomic growing + priority gene
+    ecdc_covered = country_iso3 in ECDC_COUNTRIES
+    has_phenotypic_data = gap in ("very_low", "low")
+    if (ecdc_covered or has_phenotypic_data) and genomic_growing and gene_tier == 1:
+        caveat = ""
+        if gap == "very_low":
+            caveat = (
+                "Phenotypic resistance is very low (<5%) — genomic spread is outpacing "
+                "clinical detection. Phenotypic rates expected to rise within 1-2 reporting cycles."
+            )
+        elif gap == "low":
+            caveat = (
+                "Phenotypic resistance is low (5-10%) — gene is establishing clinical foothold. "
+                "Monitor next ECDC/WHO reporting cycle for acceleration."
+            )
+        elif ecdc_covered and gap == "absent":
+            caveat = (
+                country_iso3 + " is covered by ECDC EARS-Net (ingested by AMR-Intel). "
+                "Gene presence without phenotypic signal is a genuine pre-phenotypic window — "
+                "resistance has not yet appeared in clinical isolates."
+            )
+        return (PRECURSOR_TIER_1, caveat)
+
+    # Tier 1 for tier-2 genes in ECDC countries with confirmed low phenotypic
+    if ecdc_covered and has_phenotypic_data and genomic_growing:
+        return (
+            PRECURSOR_TIER_1,
+            "Phenotypic resistance is " + gap.replace("_", " ") + " — "
+            "genomic spread in a well-surveilled country suggests imminent rise."
+        )
+
+    # Tier 2 — Candidate Precursor (gene growing, phenotypic data absent/limited)
     return (
-        "MEDIUM",
-        country_iso3 + " has limited phenotypic surveillance coverage globally. "
-        "Genomic detection without phenotypic data is plausible as a true "
-        "pre-phenotypic signal but requires in-country validation."
+        PRECURSOR_TIER_2,
+        country_iso3 + " lacks comprehensive phenotypic surveillance in AMR-Intel sources. "
+        "Pre-phenotypic status is inferred from genomic trend — requires in-country "
+        "validation before clinical or policy action."
     )
 
 
@@ -423,7 +508,16 @@ def score_signal(
     gap_score = {"absent": 25, "very_low": 18, "low": 10}.get(phenotypic_gap, 0)
     count_score = min(20, int(math.log10(max(isolate_count, 1)) * 5))
     accel_score = int(acceleration.get("acceleration_score", 0) * 15)
-    conf_score = {"HIGH": 10, "MEDIUM": 6, "LOW": 2}.get(surveillance_confidence, 4)
+    # Map tier labels to confidence score
+    tier_conf_map = {
+        "Tier 1 — Confirmed Precursor": 10,
+        "Tier 2 — Candidate Precursor": 6,
+        "Tier 3 — Established Resistance": 3,
+        "Surveillance Gap": 2,
+        # Legacy HIGH/MEDIUM/LOW support
+        "HIGH": 10, "MEDIUM": 6, "LOW": 2,
+    }
+    conf_score = tier_conf_map.get(surveillance_confidence, 4)
 
     # Convergence bonus: ECDC country + critical gene + phenotype appearing + fast growth
     convergence_bonus = 0
@@ -564,10 +658,20 @@ def run_detector(
                 skipped_established += 1
                 continue
 
-            confidence, caveat = classify_confidence(country_iso3, gap)
+            precursor_tier, caveat = classify_precursor_tier(
+                country_iso3, gap, acceleration, gene_info["tier"]
+            )
+            # Keep surveillance_confidence mapped from tier for backward compat
+            tier_to_legacy = {
+                "Tier 1 — Confirmed Precursor": "HIGH",
+                "Tier 2 — Candidate Precursor": "MEDIUM",
+                "Tier 3 — Established Resistance": "HIGH",
+                "Surveillance Gap": "LOW",
+            }
+            confidence = tier_to_legacy.get(precursor_tier, "MEDIUM")
 
             score = score_signal(
-                gene_info["tier"], latest_count, gap, acceleration, confidence,
+                gene_info["tier"], latest_count, gap, acceleration, precursor_tier,
                 country_iso3=country_iso3,
             )
 
@@ -599,6 +703,7 @@ def run_detector(
                 phenotypic_source=phenotypic_source,
                 surveillance_confidence=confidence,
                 surveillance_caveat=caveat,
+                precursor_tier=precursor_tier,
                 severity_score=score,
                 drug_class=gene_info["drug_class"],
                 who_priority=gene_info["who"],

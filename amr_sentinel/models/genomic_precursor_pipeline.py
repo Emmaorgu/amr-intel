@@ -172,6 +172,7 @@ def precursor_to_alert_dict(signal, cycle_id: str = "") -> dict:
         "days_to_threshold": signal.days_to_threshold,
         "phenotypic_gap": signal.phenotypic_gap,
         "surveillance_confidence": signal.surveillance_confidence,
+        "precursor_tier": getattr(signal, "precursor_tier", signal.surveillance_confidence),
         "surveillance_caveat": signal.surveillance_caveat,
         "spread_risk_countries": signal.spread_risk_countries,
         "intelligence_summary": signal.intelligence_summary,

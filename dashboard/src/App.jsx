@@ -51,7 +51,13 @@ const TIER_COLOR = { critical: C.red, warn: C.amber, monitor: C.blue, high: C.am
 const TIER_BG    = { critical: C.redDim, warn: C.amberDim, monitor: C.blueDim, high: C.amberDim, watch: C.blueDim };
 const TIER_LABEL = { critical: "CRITICAL", warn: "HIGH", monitor: "WATCH", high: "HIGH", watch: "WATCH" };
 
-const CONF_COLOR = { HIGH: C.green, MEDIUM: C.amber, LOW: C.muted };
+const CONF_COLOR = {
+  HIGH: C.green, MEDIUM: C.amber, LOW: C.muted,
+  "Tier 1 — Confirmed Precursor": C.green,
+  "Tier 2 — Candidate Precursor": C.amber,
+  "Tier 3 — Established Resistance": C.blue,
+  "Surveillance Gap": C.muted,
+};
 const CONF_BG    = { HIGH: C.greenDim, MEDIUM: C.amberDim, LOW: C.surfaceHigh };
 
 const ISO3_TO_NAME = {
@@ -207,10 +213,26 @@ function SeverityBadge({ tier }) {
 }
 
 function ConfBadge({ conf }) {
-  const c = conf || "MEDIUM";
-  const color = CONF_COLOR[c] || C.muted;
-  const bg    = CONF_BG[c]    || C.surfaceHigh;
-  const icon  = c === "HIGH" ? "●" : c === "MEDIUM" ? "◐" : "○";
+  // Accepts both legacy HIGH/MEDIUM/LOW and new Tier 1/2/3/Surveillance Gap labels.
+  // Normalises display: shows short label with appropriate colour and icon.
+  const raw = conf || "MEDIUM";
+  var label = raw;
+  var icon = "◐";
+  if (raw === "HIGH" || raw === "Tier 1 — Confirmed Precursor") {
+    label = raw === "HIGH" ? "HIGH" : "Tier 1";
+    icon = "●";
+  } else if (raw === "MEDIUM" || raw === "Tier 2 — Candidate Precursor") {
+    label = raw === "MEDIUM" ? "MEDIUM" : "Tier 2";
+    icon = "◐";
+  } else if (raw === "Tier 3 — Established Resistance") {
+    label = "Tier 3";
+    icon = "▣";
+  } else if (raw === "Surveillance Gap" || raw === "LOW") {
+    label = raw === "LOW" ? "LOW" : "Gap";
+    icon = "○";
+  }
+  const color = CONF_COLOR[raw] || C.muted;
+  const bg    = CONF_BG[raw] || CONF_BG["MEDIUM"] || C.surfaceHigh;
   return (
     <span style={{
       display:"inline-flex", alignItems:"center", gap:4,
@@ -218,7 +240,27 @@ function ConfBadge({ conf }) {
       background: bg, color, border:"1px solid " + color + "40",
       fontFamily:"JetBrains Mono,monospace", fontSize:10, fontWeight:700, letterSpacing:".04em",
     }}>
-      {icon} {c}
+      {icon} {label}
+    </span>
+  );
+}
+
+// TierBadge — full tier label display for detail panels
+function TierBadge({ tier }) {
+  const raw = tier || "Tier 2 — Candidate Precursor";
+  const color = CONF_COLOR[raw] || C.amber;
+  var icon = "◐";
+  if (raw.startsWith("Tier 1")) icon = "●";
+  else if (raw.startsWith("Tier 3")) icon = "▣";
+  else if (raw === "Surveillance Gap") icon = "○";
+  return (
+    <span style={{
+      display:"inline-flex", alignItems:"center", gap:6,
+      padding:"4px 10px", borderRadius:4,
+      background: color + "18", color, border:"1px solid " + color + "50",
+      fontFamily:"JetBrains Mono,monospace", fontSize:11, fontWeight:700,
+    }}>
+      {icon} {raw}
     </span>
   );
 }
@@ -1164,12 +1206,12 @@ function GenomicIntelligence({ onInvestigate }) {
 
   const tabCounts = {
     all:    signals.length,
-    high:   signals.filter(s => s.surveillance_confidence === "HIGH").length,
-    medium: signals.filter(s => s.surveillance_confidence === "MEDIUM").length,
+    tier1:  signals.filter(s => (s.precursor_tier||s.surveillance_confidence||"").includes("Tier 1")||(s.precursor_tier||s.surveillance_confidence)==="HIGH").length,
+    tier2:  signals.filter(s => (s.precursor_tier||s.surveillance_confidence||"").includes("Tier 2")||(s.precursor_tier||s.surveillance_confidence)==="MEDIUM").length,
   };
 
   const filtered = signals
-    .filter(s => tab === "all" || (tab === "high" && s.surveillance_confidence === "HIGH") || (tab === "medium" && s.surveillance_confidence === "MEDIUM"))
+    .filter(s => { var t = s.precursor_tier || s.surveillance_confidence || ""; return tab==="all" || (tab==="tier1" && (t.includes("Tier 1")||t==="HIGH")) || (tab==="tier2" && (t.includes("Tier 2")||t==="MEDIUM")); })
     .filter(s => !search || (s.gene_name||"").toLowerCase().includes(search.toLowerCase()) || (s.pathogen_name||"").toLowerCase().includes(search.toLowerCase()) || (s.country_iso3||"").toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => (b.severity_score||0) - (a.severity_score||0));
 
@@ -1197,13 +1239,14 @@ function GenomicIntelligence({ onInvestigate }) {
         </div>
       </div>
 
-      {/* Confidence legend */}
+      {/* Tier guide */}
       <div style={{background:C.surface,border:"1px solid " + C.teal + "30",borderRadius:8,padding:"12px 16px",marginBottom:16,display:"flex",gap:24,alignItems:"center"}}>
-        <div style={{fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",flexShrink:0}}>Confidence Guide</div>
+        <div style={{fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",flexShrink:0}}>Signal Tier Guide</div>
         {[
-          {icon:"●",conf:"HIGH",desc:"ECDC-covered country — phenotypic data is reliable. Gene growing, resistance not yet detected. Genuine precursor."},
-          {icon:"◐",conf:"MEDIUM",desc:"Limited surveillance coverage. Genomic detection without phenotypic data is plausible but requires in-country validation."},
-          {icon:"○",conf:"LOW",desc:"Country has independent surveillance (CDC, China AMR) not ingested. Absence of phenotypic data reflects a source gap."},
+          {icon:"●",conf:"Tier 1 — Confirmed Precursor",desc:"Gene growing + phenotypic surveillance confirms low/absent resistance. Genuine pre-phenotypic window — ECDC/WHO defensible."},
+          {icon:"◐",conf:"Tier 2 — Candidate Precursor",desc:"Gene growing but no ingested phenotypic data. Pre-phenotypic status inferred — requires in-country validation."},
+          {icon:"▣",conf:"Tier 3 — Established Resistance",desc:"Both genomic and phenotypic evidence high. Resistance already established — confirmation, not early warning."},
+          {icon:"○",conf:"Surveillance Gap",desc:"Country has independent surveillance (CDC/NHSN, China AMR) not yet ingested. Cannot confirm pre-phenotypic status."},
         ].map(item => (
           <div key={item.conf} style={{display:"flex",alignItems:"flex-start",gap:8,flex:1}}>
             <span style={{color:CONF_COLOR[item.conf],fontSize:14,flexShrink:0,marginTop:1}}>{item.icon}</span>
@@ -1218,7 +1261,7 @@ function GenomicIntelligence({ onInvestigate }) {
       {/* Stat cards */}
       <div className="stat-row" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
         <StatCard label="Precursor Signals" value={signals.length} sub="gene present, phenotype low/absent" accent={C.teal}/>
-        <StatCard label="HIGH Confidence" value={highConf} sub="ECDC-covered countries" accent={C.green}/>
+        <StatCard label="Tier 1 Signals" value={tabCounts.tier1} sub="Confirmed precursors" accent={C.green}/>
         <StatCard label="Carbapenem Genes" value={carbapenem} sub="critical-tier resistance" accent={C.red}/>
         <StatCard label="Countries Affected" value={uniqueCountries} sub={"fastest doubling: " + (fastestDoubling < 99 ? fastestDoubling + "yr" : "N/A")} accent={C.amber}/>
       </div>
@@ -1228,8 +1271,8 @@ function GenomicIntelligence({ onInvestigate }) {
         <div style={{display:"flex",gap:2,borderBottom:"1px solid " + C.border,flex:1}}>
           {[
             {id:"all",label:"All Signals (" + tabCounts.all + ")"},
-            {id:"high",label:"● HIGH (" + tabCounts.high + ")"},
-            {id:"medium",label:"◐ MEDIUM (" + tabCounts.medium + ")"},
+            {id:"tier1",label:"● Tier 1 (" + tabCounts.tier1 + ")"},
+            {id:"tier2",label:"◐ Tier 2 (" + tabCounts.tier2 + ")"},
           ].map(t => (
             <button key={t.id} onClick={()=>setTab(t.id)} style={{
               padding:"8px 16px",background:"none",border:"none",
@@ -1248,7 +1291,7 @@ function GenomicIntelligence({ onInvestigate }) {
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead>
               <tr style={{background:C.surfaceHigh,borderBottom:"1px solid " + C.border}}>
-                {["Score","Gene","Pathogen","Country","Trajectory","Doubling","Phenotypic","Confidence",""].map(h=>(
+                {["Score","Gene","Pathogen","Country","Trajectory","Doubling","Phenotypic","Tier",""].map(h=>(
                   <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:10,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                 ))}
               </tr>
@@ -1297,7 +1340,7 @@ function GenomicIntelligence({ onInvestigate }) {
                       <span style={{fontSize:10,color:C.muted,fontStyle:"italic"}}>No data</span>
                     )}
                   </td>
-                  <td style={{padding:"10px 14px"}}><ConfBadge conf={s.surveillance_confidence}/></td>
+                  <td style={{padding:"10px 14px"}}><ConfBadge conf={s.precursor_tier||s.surveillance_confidence}/></td>
                   <td style={{padding:"10px 14px",color:selected?.alert_id===s.alert_id?C.teal:C.accent,fontSize:12}}>{selected?.alert_id===s.alert_id?"✕":"›"}</td>
                 </tr>
               ))}
@@ -1316,7 +1359,7 @@ function GenomicIntelligence({ onInvestigate }) {
                 <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:20,fontWeight:800,color:C.teal,lineHeight:1}}>{selected.gene_name}</div>
                 <div style={{fontSize:11,color:C.muted,marginTop:3}}>{selected.gene_description||""}</div>
               </div>
-              <ConfBadge conf={selected.surveillance_confidence}/>
+              <TierBadge tier={selected.precursor_tier||selected.surveillance_confidence}/>
             </div>
 
             <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:16}}>
@@ -1492,7 +1535,10 @@ function AlertInvestigation({ alert: init }) {
     if(alert.isolate_count) drivers.push(alert.isolate_count.toLocaleString() + " sequenced isolates detected carrying " + (alert.gene_name||"resistance gene"));
     if(alert.current_resistance > 0) drivers.push("Phenotypic resistance beginning to appear (" + (alert.current_resistance*100).toFixed(1) + "%) — converging signals");
     else drivers.push("No phenotypic resistance yet detected — genuine pre-phenotypic window");
-    if(alert.surveillance_confidence === "HIGH") drivers.push("HIGH confidence — ECDC phenotypic surveillance confirms data reliability");
+    var _tier = alert.precursor_tier||alert.surveillance_confidence||"";
+  if(_tier.includes("Tier 1")||_tier==="HIGH") drivers.push("Tier 1 — Confirmed Precursor: ECDC phenotypic surveillance confirms gene presence is a genuine pre-phenotypic signal");
+  else if(_tier.includes("Tier 2")||_tier==="MEDIUM") drivers.push("Tier 2 — Candidate Precursor: pre-phenotypic status inferred from genomic trend, requires in-country validation");
+  else if(_tier.includes("Tier 3")) drivers.push("Tier 3 — Established Resistance: both genomic and phenotypic evidence high — resistance confirmed, not a new emergence");
   }
 
   const tabs = [
@@ -1568,7 +1614,7 @@ function AlertInvestigation({ alert: init }) {
               <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:36,fontWeight:800,color:accentColor,lineHeight:1,flexShrink:0}}>{alert.severity_score}</div>
               <div>
                 <div style={{fontSize:9,color:C.muted,letterSpacing:".08em",textTransform:"uppercase",marginBottom:2}}>Intelligence Score</div>
-                {isGenomic ? <ConfBadge conf={alert.surveillance_confidence}/> : <SeverityBadge tier={alert.severity_tier}/>}
+                {isGenomic ? <TierBadge tier={alert.precursor_tier||alert.surveillance_confidence}/> : <SeverityBadge tier={alert.severity_tier}/>}
               </div>
               {isGenomic && <span style={{fontSize:11,background:C.tealDim,color:C.teal,padding:"3px 10px",borderRadius:4,border:"1px solid " + C.teal + "40",fontFamily:"JetBrains Mono,monospace",fontWeight:700}}>🧬 GENOMIC PRECURSOR</span>}
             </div>
@@ -1777,7 +1823,7 @@ function AlertInvestigation({ alert: init }) {
                         <div>
                           <div style={{fontSize:9,color:C.teal,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8,paddingBottom:6,borderBottom:"1px solid " + C.border}}>Confidence Assessment</div>
                           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                            <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:18,fontWeight:800,color:CONF_COLOR[alert.surveillance_confidence]||C.muted}}>{alert.surveillance_confidence||"MEDIUM"}</span>
+                            <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:18,fontWeight:800,color:CONF_COLOR[alert.precursor_tier||alert.surveillance_confidence]||C.muted}}>{(alert.precursor_tier||alert.surveillance_confidence||"Tier 2 — Candidate Precursor").replace("Tier 1 — Confirmed Precursor","T1").replace("Tier 2 — Candidate Precursor","T2").replace("Tier 3 — Established Resistance","T3").replace("Surveillance Gap","GAP")}</span>
                             <span style={{fontSize:12,color:C.muted}}>Surveillance Confidence</span>
                           </div>
                           {alert.surveillance_caveat && (
@@ -1966,8 +2012,8 @@ function AlertInvestigation({ alert: init }) {
           <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:16}}>
             <div style={{fontSize:9,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:12}}>Confidence Assessment</div>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:22,fontWeight:800,color:isGenomic?(CONF_COLOR[alert.surveillance_confidence]||C.amber):C.green}}>
-                {isGenomic ? (alert.surveillance_confidence||"MEDIUM") : "HIGH"}
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:22,fontWeight:800,color:isGenomic?(CONF_COLOR[alert.precursor_tier||alert.surveillance_confidence]||C.amber):C.green}}>
+                {isGenomic ? ((alert.precursor_tier||alert.surveillance_confidence||"T2").replace("Tier 1 — Confirmed Precursor","T1").replace("Tier 2 — Candidate Precursor","T2").replace("Tier 3 — Established Resistance","T3").replace("Surveillance Gap","GAP")) : "HIGH"}
               </div>
               <div style={{fontSize:11,color:C.muted}}>{isGenomic ? "Surveillance Confidence" : "Forecast Confidence"}</div>
             </div>

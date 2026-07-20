@@ -65,7 +65,7 @@ GENOMIC_EXTRA_FIELDS = {
     "acceleration_score", "doubling_time_years", "days_to_threshold",
     "phenotypic_gap", "surveillance_confidence", "surveillance_caveat",
     "spread_risk_countries", "intelligence_summary", "who_priority",
-    "genomic_context", "evidence_years",
+    "genomic_context", "evidence_years", "precursor_tier",
 }
 
 
