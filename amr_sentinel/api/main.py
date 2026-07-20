@@ -357,25 +357,25 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     """
     Platform statistics.
 
-    critical_alerts and warn_alerts count ALL signal types — phenotypic and
-    genomic. A genomic signal scored critical is critical. The stat card and
-    the Critical tab in Threat Operations show the same number.
-    genomic_precursor_alerts gives the breakdown of genomic-only signals.
+    critical_alerts and warn_alerts count PHENOTYPIC signals only
+    (trajectory_deviation and rate_spike). Genomic precursor alerts are a
+    distinct signal class and reported separately as genomic_precursor_alerts.
+
+    This separation prevents genomic precursor counts (which can be large and
+    grow with each NDARO update) from inflating the headline operational
+    metrics that clinicians and analysts use to triage their day.
     """
     # Total across all signal types
     total = db.query(Alert).count()
 
-    # All-signal counts — critical/warn include both phenotypic and genomic.
-    # A genomic signal scored critical IS critical. The stat card and the
-    # Critical tab in Threat Operations must show the same number.
-    all_q = db.query(Alert)
-    critical = all_q.filter(Alert.severity_tier == "critical").count()
-    warn = all_q.filter(Alert.severity_tier == "warn").count()
-
-    # Phenotypic base query — used for 24h rolling window (operational triage)
+    # Phenotypic-only base query — excludes genomic_precursor
     phenotypic_q = db.query(Alert).filter(Alert.signal_type != "genomic_precursor")
 
-    # Genomic precursor count — reported separately for dashboard breakdown
+    # Headline critical/warn counts: phenotypic only
+    critical = phenotypic_q.filter(Alert.severity_tier == "critical").count()
+    warn = phenotypic_q.filter(Alert.severity_tier == "warn").count()
+
+    # Genomic precursor count — reported separately, not in critical headline
     genomic_precursor_count = db.query(Alert).filter(
         Alert.signal_type == "genomic_precursor"
     ).count()
@@ -383,7 +383,9 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     validated = db.query(Alert).filter(Alert.outcome_confirmed == True).count()
     false_pos = db.query(Alert).filter(Alert.outcome_confirmed == False).count()
     pathogens = db.query(Alert.pathogen_name).distinct().count()
-    countries = db.query(Alert.country_iso3).distinct().count()
+    # Count from resistance_records — the full source data coverage,
+    # not alerts (which are a filtered high-signal subset).
+    countries = db.query(ResistanceRecord.country_iso3).distinct().count()
     last_alert = db.query(Alert.created_at).order_by(Alert.created_at.desc()).first()
     last_run = last_alert[0] if last_alert else None
     rr_total = db.query(ResistanceRecord).count()
