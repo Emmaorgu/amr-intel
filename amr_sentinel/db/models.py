@@ -267,3 +267,74 @@ class GenomicSignal(Base):
             f"<GenomicSignal {self.gene_name}/{self.pathogen_name}/"
             f"{self.country_iso3} year={self.year} n={self.isolate_count}>"
         )
+
+class StateTransition(Base):
+    """
+    State Transition Tracker — append-mode history of resistance tier
+    per triplet per year.
+
+    One row per (pathogen, antibiotic, country, year). Records the
+    resistance tier at that point in time:
+        STABLE      — resistance low, no acceleration
+        WATCH       — resistance low but accelerating
+        EMERGING    — new or rapidly rising resistance
+        CRITICAL    — resistance high (>25%) or above threshold
+        IMPROVING   — resistance previously high, now declining
+
+    Answers:
+        "Which threats moved from WATCH to EMERGING fastest?"
+        "Which countries show IMPROVING transitions after intervention?"
+        "How long did Croatia take to go from WATCH to CRITICAL?"
+
+    Populated by:
+        python -m amr_sentinel.models.state_transition_tracker
+
+    Used by:
+        GET /alerts/{id}/history — timeline for Alert Investigation History tab
+        GET /state-transitions?pathogen=...&country=... — full history query
+    """
+    __tablename__ = "state_transitions"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    pathogen_name = Column(String(255), nullable=False, index=True)
+    antibiotic_name = Column(String(255), nullable=False, index=True)
+    country_iso3 = Column(String(3), nullable=False, index=True)
+    region_who = Column(String(50), nullable=True)
+    year = Column(SmallInteger, nullable=False)
+    resistance_rate = Column(Float, nullable=True)
+    sample_count = Column(Integer, nullable=True)
+    data_source = Column(String(50), nullable=True)
+
+    # Tier at this point in time
+    tier = Column(String(20), nullable=False)  # STABLE/WATCH/EMERGING/CRITICAL/IMPROVING
+
+    # Context for the transition
+    previous_tier = Column(String(20), nullable=True)  # NULL for first observation
+    tier_changed = Column(Boolean, nullable=False, default=False)
+    years_in_previous_tier = Column(SmallInteger, nullable=True)
+
+    # Quantitative signals
+    rate_change_1yr = Column(Float, nullable=True)   # absolute change vs prior year
+    rate_change_3yr = Column(Float, nullable=True)   # absolute change vs 3 years prior
+    acceleration = Column(Float, nullable=True)       # 2nd derivative (rate of rate change)
+
+    computed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pathogen_name", "antibiotic_name", "country_iso3", "year",
+            name="uq_state_transition_triplet_year"
+        ),
+        Index("ix_state_transitions_triplet",
+              "pathogen_name", "antibiotic_name", "country_iso3"),
+        Index("ix_state_transitions_tier", "tier"),
+        Index("ix_state_transitions_year", "year"),
+        Index("ix_state_transitions_changed", "tier_changed"),
+        Index("ix_state_transitions_country_year", "country_iso3", "year"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<StateTransition {self.pathogen_name}/{self.antibiotic_name}/"
+            f"{self.country_iso3} year={self.year} tier={self.tier}>"
+        )

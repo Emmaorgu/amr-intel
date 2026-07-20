@@ -732,3 +732,105 @@ def get_causal_context(
     except Exception as exc:
         logger.error("Causal analysis failed for %s: %s", alert_id, exc)
         raise HTTPException(status_code=500, detail="Causal analysis failed: " + str(exc))
+
+@app.get("/alerts/{alert_id}/history", tags=["Intelligence"])
+def get_alert_history(
+    alert_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_api_key),
+):
+    """
+    State transition history for a resistance triplet.
+
+    Returns the year-by-year tier progression (STABLE → WATCH → EMERGING →
+    CRITICAL → IMPROVING) for the pathogen/antibiotic/country combination
+    of the given alert. Populated by state_transition_tracker.py.
+    """
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert " + str(alert_id) + " not found.")
+
+    try:
+        from amr_sentinel.models.state_transition_tracker import get_triplet_history
+        history = get_triplet_history(
+            db,
+            pathogen_name=alert.pathogen_name,
+            antibiotic_name=alert.antibiotic_name,
+            country_iso3=alert.country_iso3,
+        )
+        return {
+            "alert_id": str(alert_id),
+            "pathogen_name": alert.pathogen_name,
+            "antibiotic_name": alert.antibiotic_name,
+            "country_iso3": alert.country_iso3,
+            "history": history,
+            "total_years": len(history),
+            "tier_changes": sum(1 for h in history if h["tier_changed"]),
+            "first_year": history[0]["year"] if history else None,
+            "latest_tier": history[-1]["tier"] if history else None,
+        }
+    except Exception as exc:
+        logger.error("History query failed for %s: %s", alert_id, exc)
+        raise HTTPException(status_code=500, detail="History query failed: " + str(exc))
+
+
+@app.get("/state-transitions", tags=["Intelligence"])
+def get_state_transitions(
+    pathogen: Optional[str] = Query(default=None),
+    antibiotic: Optional[str] = Query(default=None),
+    country: Optional[str] = Query(default=None),
+    tier: Optional[str] = Query(default=None),
+    tier_changed_only: bool = Query(default=False),
+    year_from: Optional[int] = Query(default=None),
+    year_to: Optional[int] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _: str = Depends(get_api_key),
+):
+    """
+    Query state transition history across all triplets.
+
+    Useful for finding:
+    - All EMERGING transitions in a given year
+    - Which triplets moved fastest from STABLE to CRITICAL
+    - Countries showing IMPROVING transitions
+    """
+    try:
+        from amr_sentinel.db.models import StateTransition
+    except ImportError:
+        raise HTTPException(status_code=503, detail="State transitions table not yet created. Run alembic upgrade head.")
+
+    q = db.query(StateTransition)
+    if pathogen:
+        q = q.filter(StateTransition.pathogen_name.ilike("%" + pathogen + "%"))
+    if antibiotic:
+        q = q.filter(StateTransition.antibiotic_name.ilike("%" + antibiotic + "%"))
+    if country:
+        q = q.filter(StateTransition.country_iso3 == country.upper())
+    if tier:
+        q = q.filter(StateTransition.tier == tier.upper())
+    if tier_changed_only:
+        q = q.filter(StateTransition.tier_changed == True)
+    if year_from:
+        q = q.filter(StateTransition.year >= year_from)
+    if year_to:
+        q = q.filter(StateTransition.year <= year_to)
+
+    q = q.order_by(StateTransition.year.desc())
+    rows = q.limit(limit).all()
+
+    return [
+        {
+            "pathogen_name": r.pathogen_name,
+            "antibiotic_name": r.antibiotic_name,
+            "country_iso3": r.country_iso3,
+            "year": r.year,
+            "tier": r.tier,
+            "previous_tier": r.previous_tier,
+            "tier_changed": r.tier_changed,
+            "resistance_rate": r.resistance_rate,
+            "rate_change_1yr": r.rate_change_1yr,
+            "years_in_previous_tier": r.years_in_previous_tier,
+        }
+        for r in rows
+    ]

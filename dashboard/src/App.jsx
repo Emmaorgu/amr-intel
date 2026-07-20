@@ -1478,10 +1478,11 @@ function GenomicIntelligence({ onInvestigate }) {
 
 // ─── Screen 5: Alert Investigation ───────────────────────────────────────────
 function AlertInvestigation({ alert: init }) {
-  const [alert,   setAlert]   = useState(init);
-  const [tab,     setTab]     = useState("report");
-  const [trend,   setTrend]   = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [alert,               setAlert]               = useState(init);
+  const [tab,                 setTab]                 = useState("report");
+  const [trend,               setTrend]               = useState(null);
+  const [loading,             setLoading]             = useState(false);
+  const [forceHistoryRefresh, setForceHistoryRefresh] = useState(0);
 
   useEffect(() => {
     if (!alert) return;
@@ -2035,7 +2036,93 @@ function AlertInvestigation({ alert: init }) {
                   </div>
                 )}
 
-                {tab==="history" && <Empty msg="State transition history — STABLE → WATCH → EMERGING → CRITICAL tracking coming soon"/>}
+                {tab==="history" && (() => {
+                  // Lazy-load history from API on first open
+                  if (!alert._history && !alert._historyLoading) {
+                    alert._historyLoading = true;
+                    apiFetch("/alerts/" + (alert.alert_id||alert.id) + "/history")
+                      .then(data => {
+                        alert._history = data;
+                        alert._historyLoading = false;
+                        // Force re-render by toggling a state
+                        setForceHistoryRefresh && setForceHistoryRefresh(n => n + 1);
+                      })
+                      .catch(() => { alert._historyLoading = false; });
+                    return <div style={{padding:32,textAlign:"center",color:C.muted}}>Loading history...</div>;
+                  }
+                  if (alert._historyLoading) return <div style={{padding:32,textAlign:"center",color:C.muted}}>Loading history...</div>;
+                  if (!alert._history || !alert._history.history || alert._history.history.length === 0) {
+                    return <Empty msg="No state transition history available. Run state_transition_tracker.py to populate historical tier data."/>;
+                  }
+                  var hist = alert._history;
+                  var TIER_COLOR = {CRITICAL:C.red, EMERGING:C.amber, WATCH:C.blue, STABLE:C.muted, IMPROVING:C.green};
+                  var TIER_ICON  = {CRITICAL:"▲", EMERGING:"↑", WATCH:"→", STABLE:"—", IMPROVING:"↓"};
+                  return (
+                    <div style={{padding:"0 4px",display:"flex",flexDirection:"column",gap:16}}>
+                      {/* Summary stats */}
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+                        {[
+                          {label:"Years Tracked",  value:hist.total_years,  accent:C.teal},
+                          {label:"Tier Changes",   value:hist.tier_changes,  accent:C.amber},
+                          {label:"First Observed", value:hist.first_year,    accent:C.muted},
+                          {label:"Current Tier",   value:hist.latest_tier,   accent:TIER_COLOR[hist.latest_tier]||C.muted},
+                        ].map(s => (
+                          <div key={s.label} style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:"12px 14px"}}>
+                            <div style={{fontSize:9,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:6}}>{s.label}</div>
+                            <div style={{fontSize:16,fontWeight:700,color:s.accent,fontFamily:"JetBrains Mono,monospace"}}>{s.value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Timeline */}
+                      <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,overflow:"hidden"}}>
+                        <div style={{padding:"10px 16px",borderBottom:"1px solid " + C.border,fontSize:9,color:C.muted,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase"}}>
+                          Resistance Tier Timeline — {hist.pathogen_name} / {hist.antibiotic_name} / {hist.country_iso3}
+                        </div>
+                        <div style={{overflowX:"auto"}}>
+                          <table style={{width:"100%",borderCollapse:"collapse",minWidth:600}}>
+                            <thead><tr style={{background:C.surfaceHigh}}>
+                              {["Year","Rate","Tier","Change","Δ1yr","Δ3yr"].map(h=>(
+                                <th key={h} style={{padding:"8px 14px",textAlign:"left",fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".04em"}}>{h}</th>
+                              ))}
+                            </tr></thead>
+                            <tbody>
+                              {hist.history.map((h,i) => {
+                                var tcolor = TIER_COLOR[h.tier] || C.muted;
+                                var changed = h.tier_changed;
+                                return (
+                                  <tr key={i} style={{borderTop:"1px solid " + C.border,background:changed?"rgba(255,255,255,0.03)":"transparent"}}>
+                                    <td style={{padding:"8px 14px",fontSize:12,color:C.white,fontFamily:"JetBrains Mono,monospace",fontWeight:changed?700:400}}>{h.year}</td>
+                                    <td style={{padding:"8px 14px",fontSize:12,color:tcolor,fontFamily:"JetBrains Mono,monospace",fontWeight:600}}>
+                                      {h.resistance_rate != null ? (Math.round(h.resistance_rate*1000)/10)+"%": "—"}
+                                    </td>
+                                    <td style={{padding:"8px 14px"}}>
+                                      <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:3,background:tcolor+"18",color:tcolor,border:"1px solid "+tcolor+"40",fontFamily:"JetBrains Mono,monospace",fontSize:10,fontWeight:700}}>
+                                        {TIER_ICON[h.tier]} {h.tier}
+                                      </span>
+                                    </td>
+                                    <td style={{padding:"8px 14px",fontSize:11}}>
+                                      {changed
+                                        ? <span style={{color:tcolor,fontWeight:700,fontFamily:"JetBrains Mono,monospace"}}>{h.previous_tier} → {h.tier}</span>
+                                        : <span style={{color:C.muted}}>—</span>
+                                      }
+                                    </td>
+                                    <td style={{padding:"8px 14px",fontSize:11,fontFamily:"JetBrains Mono,monospace",color:h.rate_change_1yr>0?C.red:h.rate_change_1yr<0?C.green:C.muted}}>
+                                      {h.rate_change_1yr != null ? (h.rate_change_1yr>0?"+":"")+Math.round(h.rate_change_1yr*1000)/10+"pp" : "—"}
+                                    </td>
+                                    <td style={{padding:"8px 14px",fontSize:11,fontFamily:"JetBrains Mono,monospace",color:h.rate_change_3yr>0?C.red:h.rate_change_3yr<0?C.green:C.muted}}>
+                                      {h.rate_change_3yr != null ? (h.rate_change_3yr>0?"+":"")+Math.round(h.rate_change_3yr*1000)/10+"pp" : "—"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {tab==="genomic_context" && (() => {
                   if (!causalCtx && !causalLoading) loadCausalContext();
