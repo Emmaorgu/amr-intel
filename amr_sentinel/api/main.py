@@ -667,3 +667,68 @@ def get_emergence_radar(
         }
         result.append(d)
     return result
+
+@app.get("/alerts/{alert_id}/causal-context", tags=["Intelligence"])
+def get_causal_context(
+    alert_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_api_key),
+):
+    """
+    On-demand causal intelligence for a phenotypic alert.
+
+    Cross-references genomic_signals against resistance_records to generate
+    a mechanistic explanation for the observed resistance trend. Returns
+    gene-level evidence, doubling time, confidence, and narrative.
+    """
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert " + str(alert_id) + " not found.")
+
+    if alert.signal_type == "genomic_precursor":
+        return {
+            "alert_id": str(alert_id),
+            "signal_type": "genomic_precursor",
+            "message": "Causal context not applicable to genomic precursor alerts — "
+                       "this signal IS the genomic layer.",
+            "causal_confidence": "N/A",
+        }
+
+    try:
+        from amr_sentinel.models.causal_intelligence import analyse_single_alert_from_db
+        ctx = analyse_single_alert_from_db(
+            alert_id=str(alert_id),
+            pathogen_name=alert.pathogen_name,
+            antibiotic_name=alert.antibiotic_name,
+            country_iso3=alert.country_iso3,
+            current_resistance=alert.current_resistance or 0.0,
+            trend_direction=alert.trend_direction or "rising",
+        )
+        return {
+            "alert_id": str(alert_id),
+            "pathogen_name": ctx.pathogen_name,
+            "antibiotic_name": ctx.antibiotic_name,
+            "country_iso3": ctx.country_iso3,
+            "phenotypic_rate": ctx.phenotypic_rate,
+            "trend_direction": ctx.trend_direction,
+            "causal_confidence": ctx.causal_confidence,
+            "causal_narrative": ctx.causal_narrative,
+            "lead_time_note": ctx.lead_time_note,
+            "mechanism_summary": ctx.mechanism_summary,
+            "genomic_genes": [
+                {
+                    "gene_name": g.gene_name,
+                    "gene_family": g.gene_family,
+                    "isolate_count": g.isolate_count,
+                    "latest_year": g.latest_year,
+                    "doubling_time_years": g.doubling_time_years,
+                    "precursor_tier": g.precursor_tier,
+                    "time_series": g.time_series,
+                }
+                for g in ctx.genomic_genes
+            ],
+            "analysed_at": ctx.analysed_at,
+        }
+    except Exception as exc:
+        logger.error("Causal analysis failed for %s: %s", alert_id, exc)
+        raise HTTPException(status_code=500, detail="Causal analysis failed: " + str(exc))

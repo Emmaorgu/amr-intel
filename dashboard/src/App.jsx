@@ -1549,9 +1549,23 @@ function AlertInvestigation({ alert: init }) {
   const tabs = [
     {id:"report",   label:"Intelligence Report"},
     {id:"trend",    label: isGenomic ? "Genomic Trajectory" : "Trajectory Analysis"},
+    ...(!isGenomic ? [{id:"genomic_context", label:"🧬 Genomic Context"}] : []),
     {id:"citations",label:"Evidence (" + cits.length + ")"},
     {id:"history",  label:"History"},
   ];
+
+  // Genomic context state — fetched on demand when tab is opened
+  const [causalCtx,     setCausalCtx]     = useState(null);
+  const [causalLoading, setCausalLoading] = useState(false);
+  const [causalTab,     setCausalTab]     = useState("report");
+
+  function loadCausalContext() {
+    if (causalCtx || causalLoading || isGenomic) return;
+    setCausalLoading(true);
+    apiFetch("/alerts/" + (alert.alert_id||alert.id) + "/causal-context")
+      .then(data => { setCausalCtx(data); setCausalLoading(false); })
+      .catch(() => { setCausalLoading(false); });
+  }
 
   // Structured bulletin sections parsed from stewardship_guidance
   function renderStructuredBulletin(text) {
@@ -2006,6 +2020,70 @@ function AlertInvestigation({ alert: init }) {
                 )}
 
                 {tab==="history" && <Empty msg="State transition history — STABLE → WATCH → EMERGING → CRITICAL tracking coming soon"/>}
+
+                {tab==="genomic_context" && (() => {
+                  if (!causalCtx && !causalLoading) loadCausalContext();
+                  if (causalLoading) return <div style={{padding:32,textAlign:"center",color:C.muted}}>Analysing genomic-phenotypic cross-layer evidence...</div>;
+                  if (!causalCtx) return <Empty msg="Loading causal context..."/>;
+                  if (causalCtx.message) return <Empty msg={causalCtx.message}/>;
+                  var confColor = causalCtx.causal_confidence==="HIGH" ? C.green : causalCtx.causal_confidence==="MEDIUM" ? C.amber : C.muted;
+                  return (
+                    <div style={{padding:"0 4px",display:"flex",flexDirection:"column",gap:16}}>
+                      {/* Confidence badge */}
+                      <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:C.surface,borderRadius:8,border:"1px solid " + confColor + "40"}}>
+                        <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:18,fontWeight:800,color:confColor}}>{causalCtx.causal_confidence}</div>
+                        <div>
+                          <div style={{fontSize:11,fontWeight:700,color:C.white}}>Causal Confidence</div>
+                          <div style={{fontSize:10,color:C.muted}}>{causalCtx.mechanism_summary||"Cross-layer analysis complete"}</div>
+                        </div>
+                      </div>
+                      {/* Causal narrative */}
+                      <div style={{background:C.surface,borderRadius:8,border:"1px solid " + C.border,padding:16}}>
+                        <div style={{fontSize:9,color:C.teal,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:10}}>Causal Narrative</div>
+                        <div style={{fontSize:12,color:C.mutedHigh,lineHeight:1.7}}>{causalCtx.causal_narrative}</div>
+                      </div>
+                      {/* Lead time note */}
+                      {causalCtx.lead_time_note && (
+                        <div style={{background:C.tealDim,borderRadius:8,border:"1px solid " + C.teal + "40",padding:16}}>
+                          <div style={{fontSize:9,color:C.teal,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>Lead Time Intelligence</div>
+                          <div style={{fontSize:12,color:C.mutedHigh,lineHeight:1.6}}>{causalCtx.lead_time_note}</div>
+                        </div>
+                      )}
+                      {/* Genomic genes table */}
+                      {causalCtx.genomic_genes && causalCtx.genomic_genes.length > 0 && (
+                        <div style={{background:C.surface,borderRadius:8,border:"1px solid " + C.border,overflow:"hidden"}}>
+                          <div style={{padding:"10px 16px",borderBottom:"1px solid " + C.border,fontSize:9,color:C.muted,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase"}}>Genomic Evidence — Matching Resistance Genes</div>
+                          <table style={{width:"100%",borderCollapse:"collapse"}}>
+                            <thead><tr style={{background:C.surfaceHigh}}>
+                              {["Gene","Isolates","Year","Doubling","Tier"].map(h=>(
+                                <th key={h} style={{padding:"8px 14px",textAlign:"left",fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".04em"}}>{h}</th>
+                              ))}
+                            </tr></thead>
+                            <tbody>
+                              {causalCtx.genomic_genes.map((g,i) => (
+                                <tr key={i} style={{borderTop:"1px solid " + C.border}}>
+                                  <td style={{padding:"10px 14px"}}>
+                                    <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:11,color:C.teal,fontWeight:700}}>{g.gene_name}</div>
+                                    <div style={{fontSize:10,color:C.muted}}>{g.gene_family}</div>
+                                  </td>
+                                  <td style={{padding:"10px 14px",fontSize:12,color:C.white,fontWeight:600}}>{g.isolate_count}</td>
+                                  <td style={{padding:"10px 14px",fontSize:12,color:C.mutedHigh}}>{g.latest_year}</td>
+                                  <td style={{padding:"10px 14px",fontSize:12,color:C.amber,fontFamily:"JetBrains Mono,monospace"}}>
+                                    {g.doubling_time_years ? "2x/" + g.doubling_time_years + "yr" : "—"}
+                                  </td>
+                                  <td style={{padding:"10px 14px"}}><ConfBadge conf={g.precursor_tier}/></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      {causalCtx.genomic_genes && causalCtx.genomic_genes.length === 0 && (
+                        <Empty msg="No matching resistance genes found in NCBI NDARO for this pathogen/antibiotic/country combination. This may indicate a novel resistance mechanism or a gap in genomic surveillance coverage."/>
+                      )}
+                    </div>
+                  );
+                })()}
               </>
             )}
           </div>
