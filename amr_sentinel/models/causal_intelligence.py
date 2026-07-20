@@ -322,35 +322,57 @@ def _build_causal_narrative(
             )
 
     # Confidence qualifier
-    if causal_confidence == "HIGH":
-        qualifier = "is consistent with"
+    # Tier-aware qualifier: only Tier 1 can claim causal explanation.
+    # Tier 3 (established resistance) uses co-presence language — the gene
+    # did not necessarily *cause* the resistance to appear; both are co-present.
+    is_tier1 = any("Tier 1" in g.precursor_tier for g in genomic_genes)
+    is_tier3 = all("Tier 3" in g.precursor_tier for g in genomic_genes) if genomic_genes else False
+
+    if is_tier3:
+        qualifier = "is co-present with genomic evidence of"
+        evidence_note = (
+            " Note: this is a Tier 3 Established Resistance signal — "
+            "both phenotypic resistance and the resistance gene are already "
+            "well-established. The genomic data confirms the molecular basis "
+            "of resistance but does not represent a new emergence signal."
+        )
+    elif causal_confidence == "HIGH" and is_tier1:
+        qualifier = "is consistent with the expanding genomic prevalence of"
         evidence_note = (
             " This connection is supported by ECDC phenotypic surveillance confirming "
             "that the resistance rates are genuine and not artefacts of sampling variation."
         )
     elif causal_confidence == "MEDIUM":
-        qualifier = "may be explained by"
+        qualifier = "may be associated with the genomic prevalence of"
         evidence_note = (
             " This association is plausible but phenotypic surveillance coverage "
             "for " + country_iso3 + " is limited in AMR-Intel sources — "
             "in-country validation is recommended before clinical action."
         )
     else:
-        qualifier = "is potentially associated with"
-        evidence_note = " Independent genomic surveillance data should be consulted to confirm this association."
+        qualifier = "is consistent with"
+        evidence_note = (
+            " This connection is supported by ECDC phenotypic surveillance confirming "
+            "that the resistance rates are genuine."
+        )
 
     # Tier note
     tier_note = ""
-    if lead.precursor_tier == "Tier 1 — Confirmed Precursor":
+    if is_tier1:
         tier_note = (
             " This gene has been classified as a Tier 1 Confirmed Precursor — "
             "genomic spread is confirmed in a country with reliable phenotypic surveillance, "
             "and the phenotypic rate remains low, representing an active emergence window."
         )
-    elif lead.precursor_tier == "Tier 2 — Candidate Precursor":
+    elif any("Tier 2" in g.precursor_tier for g in genomic_genes):
         tier_note = (
             " This gene is classified as a Tier 2 Candidate Precursor — "
             "genomic spread is detected but phenotypic confirmation is limited."
+        )
+    elif is_tier3:
+        tier_note = (
+            " This gene is classified as Tier 3 Established Resistance — "
+            "resistance is already well-established in this country."
         )
 
     narrative = (
@@ -374,11 +396,28 @@ def _build_lead_time_note(
     phenotypic_rate: float,
 ) -> str:
     """
-    Estimate and describe the genomic lead time over phenotypic detection.
+    Build an accurate lead time note based on the signal tier.
 
-    The lead time is estimated as the time between the first year a genomic
-    signal appeared in NDARO and the point at which phenotypic rates became
-    clinically significant (>5%).
+    CRITICAL ACCURACY RULE:
+    Lead time language is ONLY used for Tier 1 — Confirmed Precursor signals,
+    where the genomic gene is present AND phenotypic resistance is genuinely
+    low or absent (<10%). In this case the gene arrived before clinical
+    resistance was detectable — that is a real lead time.
+
+    For Tier 3 — Established Resistance (phenotypic rate already high), the
+    genomic and phenotypic signals are co-present. The NDARO first-detection
+    year reflects when sequenced isolates entered the database, NOT when the
+    gene arrived in that country. Claiming "7 years of spread preceding
+    clinical expression" would be scientifically inaccurate and commercially
+    damaging if challenged by a clinical reviewer or acquirer.
+
+    Lead time note tiers:
+        Tier 1, phenotypic < 5%:  Active early warning window. Gene detected
+                                   X years before phenotype is clinically significant.
+        Tier 1, phenotypic 5-10%: Emergence window narrowing. Gene detected
+                                   X years before rates became clinically significant.
+        Tier 3, phenotypic >= 10%: No lead time claim. States co-presence.
+        No genomic data:           Returns empty string.
     """
     if not genomic_genes or phenotypic_rate <= 0:
         return ""
@@ -390,26 +429,49 @@ def _build_lead_time_note(
 
     first_genomic_year = min(ts.keys())
     current_year = datetime.now(timezone.utc).year
+    tier = lead.precursor_tier
 
-    if phenotypic_rate < 0.05:
-        # Gene present but phenotype still low — active lead time window
+    # Tier 1 — Confirmed Precursor: phenotypic rate genuinely low/absent.
+    # This is the only case where we can make a lead time claim.
+    if phenotypic_rate < 0.05 and "Tier 1" in tier:
         years_ahead = current_year - first_genomic_year
         return (
-            "AMR-Intel first detected " + lead.gene_name + " in " + str(first_genomic_year)
-            + " — " + str(years_ahead) + " year(s) before phenotypic resistance "
-            "reached clinically significant levels (>5%). "
-            "This represents an active early warning window."
+            "AMR-Intel first detected " + lead.gene_name + " in "
+            + str(first_genomic_year) + ". With phenotypic resistance currently "
+            "at " + str(round(phenotypic_rate * 100, 1)) + "% — below the 5% "
+            "clinical significance threshold — the genomic signal is running "
+            + str(years_ahead) + " year(s) ahead of phenotypic detection. "
+            "This is an active early warning window: resistance has not yet "
+            "appeared in clinical surveillance but the molecular mechanism "
+            "is already established and spreading."
         )
-    else:
-        # Both signals present — retrospective lead time
-        years_ahead = current_year - first_genomic_year
+
+    if 0.05 <= phenotypic_rate < 0.10 and "Tier 1" in tier:
+        years_since = current_year - first_genomic_year
         return (
-            "Genomic surveillance first detected " + lead.gene_name
-            + " in " + str(first_genomic_year) + ". "
-            "Phenotypic resistance is now " + str(round(phenotypic_rate * 100, 1)) + "%, "
-            "consistent with " + str(years_ahead) + " year(s) of genomic spread "
-            "preceding full clinical expression."
+            lead.gene_name + " first detected in NDARO in "
+            + str(first_genomic_year) + ". Phenotypic resistance is now "
+            + str(round(phenotypic_rate * 100, 1)) + "% — the emergence window "
+            "is narrowing. The genomic signal preceded clinically significant "
+            "phenotypic rates by approximately " + str(years_since) + " year(s)."
         )
+
+    # Tier 3 — Established Resistance: both genomic and phenotypic are high.
+    # The gene arrived in this country before our NDARO data captured it —
+    # we cannot claim our genomic detection preceded phenotypic resistance.
+    # State co-presence honestly.
+    if phenotypic_rate >= 0.10:
+        return (
+            lead.gene_name + " detected in NDARO-sequenced isolates (first recorded: "
+            + str(first_genomic_year) + "). Phenotypic "
+            + str(round(phenotypic_rate * 100, 1)) + "% resistance is co-present "
+            "with genomic evidence — this is a Tier 3 Established Resistance signal. "
+            "The NDARO first-detection year reflects when sequenced isolates entered "
+            "the database, not necessarily when the gene first arrived in this country. "
+            "No lead time claim is made."
+        )
+
+    return ""
 
 
 # ---------------------------------------------------------------------------
