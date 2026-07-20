@@ -129,6 +129,7 @@ class AlertSummarySchema(BaseModel):
     days_to_threshold: Optional[int] = None
     phenotypic_gap: Optional[str] = None
     surveillance_confidence: Optional[str] = None
+    precursor_tier: Optional[str] = None
     surveillance_caveat: Optional[str] = None
     spread_risk_countries: Optional[list] = None
     intelligence_summary: Optional[str] = None
@@ -327,7 +328,7 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
         "gene_name", "gene_family", "gene_description",
         "isolate_count", "latest_year", "time_series", "time_series_summary",
         "acceleration_score", "doubling_time_years", "days_to_threshold",
-        "phenotypic_gap", "surveillance_confidence", "surveillance_caveat",
+        "phenotypic_gap", "surveillance_confidence", "surveillance_caveat", "precursor_tier",
         "spread_risk_countries", "intelligence_summary", "who_priority",
     ]
     for gfield in genomic_fields:
@@ -383,9 +384,7 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     validated = db.query(Alert).filter(Alert.outcome_confirmed == True).count()
     false_pos = db.query(Alert).filter(Alert.outcome_confirmed == False).count()
     pathogens = db.query(Alert.pathogen_name).distinct().count()
-    # Count from resistance_records — the full source data coverage,
-    # not alerts (which are a filtered high-signal subset).
-    countries = db.query(ResistanceRecord.country_iso3).distinct().count()
+    countries = db.query(Alert.country_iso3).distinct().count()
     last_alert = db.query(Alert.created_at).order_by(Alert.created_at.desc()).first()
     last_run = last_alert[0] if last_alert else None
     rr_total = db.query(ResistanceRecord).count()
