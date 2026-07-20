@@ -957,17 +957,33 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
   // Time-windowed base — all subsequent filters operate on this slice.
   const timeFiltered = alerts.filter(a => matchesTimeWindow(a, timeWindow));
 
-  // Tab counts always use the FULL dataset regardless of time window —
-  // they show the total threat landscape. Time window only narrows table rows.
+  // Tab counts use deduped dataset — one row per threat, most recent detection.
   const tabCounts = {
-    all:      alerts.length,
-    critical: alerts.filter(a=>a.severity_tier==="critical").length,
-    high:     alerts.filter(a=>a.severity_tier==="warn").length,
-    watch:    alerts.filter(a=>a.severity_tier==="monitor").length,
-    genomic:  alerts.filter(a=>a.signal_type==="genomic_precursor").length,
+    all:      deduped.length,
+    critical: deduped.filter(a=>a.severity_tier==="critical").length,
+    high:     deduped.filter(a=>a.severity_tier==="warn").length,
+    watch:    deduped.filter(a=>a.severity_tier==="monitor").length,
+    genomic:  deduped.filter(a=>a.signal_type==="genomic_precursor").length,
   };
 
-  const filtered = timeFiltered
+  // Deduplicate phenotypic alerts by (pathogen, antibiotic, country) — keep most recent.
+  // The full history is preserved in the DB and accessible via Alert Investigation.
+  // Genomic precursor alerts are always one-per-triplet (DB constraint) so no dedup needed.
+  const deduped = (() => {
+    var seen = {};
+    // Sort newest-first so first-seen = most recent
+    var sorted = [...alerts].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
+    return sorted.filter(a => {
+      if (a.signal_type === "genomic_precursor") return true;
+      var key = (a.pathogen_name||"") + "|" + (a.antibiotic_name||"") + "|" + (a.country_iso3||"");
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+  })();
+
+  const filtered = deduped
+    .filter(a => matchesTimeWindow(a, timeWindow))
     .filter(a => tab==="all" || (tab==="critical"&&a.severity_tier==="critical") || (tab==="high"&&a.severity_tier==="warn") || (tab==="watch"&&a.severity_tier==="monitor") || (tab==="genomic"&&a.signal_type==="genomic_precursor"))
     .filter(a => !search || (a.pathogen_name||"").toLowerCase().includes(search.toLowerCase()) || (a.antibiotic_name||"").toLowerCase().includes(search.toLowerCase()) || (a.country_iso3||"").toLowerCase().includes(search.toLowerCase()) || (a.gene_name||"").toLowerCase().includes(search.toLowerCase()))
     .filter(a => filters.pathogen==="all" || a.pathogen_name===filters.pathogen)
