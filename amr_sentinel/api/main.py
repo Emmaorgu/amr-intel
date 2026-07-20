@@ -384,7 +384,9 @@ def get_stats(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
     validated = db.query(Alert).filter(Alert.outcome_confirmed == True).count()
     false_pos = db.query(Alert).filter(Alert.outcome_confirmed == False).count()
     pathogens = db.query(Alert.pathogen_name).distinct().count()
-    countries = db.query(Alert.country_iso3).distinct().count()
+    # Count from resistance_records — full source data coverage,
+    # not alerts (which are a filtered high-signal subset).
+    countries = db.query(ResistanceRecord.country_iso3).distinct().count()
     last_alert = db.query(Alert.created_at).order_by(Alert.created_at.desc()).first()
     last_run = last_alert[0] if last_alert else None
     rr_total = db.query(ResistanceRecord).count()
