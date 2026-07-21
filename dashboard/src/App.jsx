@@ -954,21 +954,10 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
   const antibiotics = [...new Set(alerts.map(a => a.antibiotic_name).filter(Boolean))].sort();
   const timeOptions = buildTimeOptions(alerts);
 
-  // Time-windowed base — all subsequent filters operate on this slice.
-  const timeFiltered = alerts.filter(a => matchesTimeWindow(a, timeWindow));
-
-  // Tab counts use deduped dataset — one row per threat, most recent detection.
-  const tabCounts = {
-    all:      deduped.length,
-    critical: deduped.filter(a=>a.severity_tier==="critical").length,
-    high:     deduped.filter(a=>a.severity_tier==="warn").length,
-    watch:    deduped.filter(a=>a.severity_tier==="monitor").length,
-    genomic:  deduped.filter(a=>a.signal_type==="genomic_precursor").length,
-  };
-
   // Deduplicate phenotypic alerts by (pathogen, antibiotic, country) — keep most recent.
   // The full history is preserved in the DB and accessible via Alert Investigation.
   // Genomic precursor alerts are always one-per-triplet (DB constraint) so no dedup needed.
+  // NOTE: deduped must be declared BEFORE tabCounts to avoid a Temporal Dead Zone crash.
   const deduped = (() => {
     var seen = {};
     // Sort newest-first so first-seen = most recent
@@ -981,6 +970,15 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
       return true;
     });
   })();
+
+  // Tab counts use deduped dataset — one row per threat, most recent detection.
+  const tabCounts = {
+    all:      deduped.length,
+    critical: deduped.filter(a=>a.severity_tier==="critical").length,
+    high:     deduped.filter(a=>a.severity_tier==="warn").length,
+    watch:    deduped.filter(a=>a.severity_tier==="monitor").length,
+    genomic:  deduped.filter(a=>a.signal_type==="genomic_precursor").length,
+  };
 
   const filtered = deduped
     .filter(a => matchesTimeWindow(a, timeWindow))
