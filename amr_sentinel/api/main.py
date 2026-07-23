@@ -99,6 +99,7 @@ class AlertSummarySchema(BaseModel):
     alert_id: Optional[str] = None     # alias for id, used by frontend
     id: uuid.UUID
     created_at: datetime
+    updated_at: Optional[datetime] = None   # last pipeline confirmation — time filters compare against this
     pathogen_name: str
     antibiotic_name: str
     antibiotic_class: Optional[str] = None
@@ -291,6 +292,7 @@ def _alert_to_dict(alert: Alert) -> dict[str, Any]:
         "alert_id": str(alert.id),  # frontend uses alert_id
         "id": alert.id,
         "created_at": alert.created_at,
+        "updated_at": getattr(alert, "updated_at", None),
         "pathogen_name": alert.pathogen_name,
         "antibiotic_name": alert.antibiotic_name,
         "antibiotic_class": alert.antibiotic_class,
