@@ -880,11 +880,12 @@ function buildTimeOptions(alerts) {
     {value:"week",   label:"This Week"},
     {value:"month",  label:"This Month"},
   ];
-  // Collect distinct YYYY-MM months present in the data
+  // Collect distinct YYYY-MM months from updated_at (confirmation date)
   var seen = {};
   alerts.forEach(function(a) {
-    if (!a.created_at) return;
-    var d = new Date(a.created_at);
+    var ts = a.updated_at || a.created_at;
+    if (!ts) return;
+    var d = new Date(ts);
     var key = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
     if (!seen[key]) {
       seen[key] = d.toLocaleDateString("en-GB",{month:"long",year:"numeric"});
@@ -897,15 +898,22 @@ function buildTimeOptions(alerts) {
   return opts;
 }
 
-// Returns true if alert.created_at falls within the selected time window.
+// Returns true if alert falls within the selected time window.
+// Compares against updated_at (last pipeline confirmation) NOT created_at.
+// created_at = immutable first-detection date (lead-time anchor).
+// updated_at = last time the daily pipeline confirmed this signal still active.
+// This means "Yesterday" shows every signal the pipeline confirmed yesterday,
+// even if it was first detected months ago — which is the correct behaviour
+// for a continuous surveillance system.
 function matchesTimeWindow(a, timeWindow) {
   if (timeWindow === "all") return true;
-  if (!a.created_at) return false;
+  // Prefer updated_at (pipeline confirmation stamp); fall back to created_at
+  // for alerts written before the updated_at column existed.
+  var ts = a.updated_at || a.created_at;
+  if (!ts) return false;
   var now = new Date();
-  var d   = new Date(a.created_at);
-  // Compare in UTC so pipeline timestamps (stored in UTC) match correctly
-  // regardless of viewer timezone. A 02:00 UTC run on Jul 20 is "today"
-  // in UTC, which is the canonical reference for server-generated timestamps.
+  var d   = new Date(ts);
+  // Compare in UTC — pipeline runs at 02:00 UTC, timestamps stored in UTC.
   var nowY = now.getUTCFullYear(), nowM = now.getUTCMonth(), nowD = now.getUTCDate();
   var dY   = d.getUTCFullYear(),   dM   = d.getUTCMonth(),   dDay = d.getUTCDate();
   if (timeWindow === "today") {
@@ -929,18 +937,14 @@ function matchesTimeWindow(a, timeWindow) {
   return true;
 }
 
-function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeWindow, onMounted }) {
+function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeWindow }) {
   const [alerts,     setAlerts]     = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState("");
   const [tab,        setTab]        = useState(initialTab || "all");
   const [sortBy,     setSortBy]     = useState(initialSort || "severity_score");
   const [filters,    setFilters]    = useState({ pathogen:"all", antibiotic:"all", region:"all" });
-  // Default to "all" — never inherit a stale time window from a previous navigation
   const [timeWindow, setTimeWindow] = useState(initialTimeWindow || "all");
-
-  // Notify parent to reset initialTimeWindow so back-navigation always starts at "All Time"
-  useEffect(function() { if (onMounted) onMounted(); }, []);
 
   useEffect(() => {
     // Genomic alerts score lower than many phenotypic alerts, so a plain
@@ -975,8 +979,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
     });
   })();
 
-  // Tab counts always reflect ALL deduped alerts regardless of active time window.
-  // This way the tab labels never show 0 and mislead users into thinking data is missing.
+  // Tab counts use deduped dataset — one row per threat, most recent detection.
   const tabCounts = {
     all:      deduped.length,
     critical: deduped.filter(a=>a.severity_tier==="critical").length,
@@ -984,8 +987,6 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
     watch:    deduped.filter(a=>a.severity_tier==="monitor").length,
     genomic:  deduped.filter(a=>a.signal_type==="genomic_precursor").length,
   };
-  // Separate count for time-filtered results shown in table footer
-  const filteredByTime = deduped.filter(a => matchesTimeWindow(a, timeWindow));
 
   const filtered = deduped
     .filter(a => matchesTimeWindow(a, timeWindow))
@@ -1068,7 +1069,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
         <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead>
             <tr style={{background:C.surfaceHigh,borderBottom:"1px solid " + C.border}}>
-              {["Severity","Threat / Pathogen","Country","Signal","Score","Type","Detected",""].map(h=>(
+              {["Severity","Threat / Pathogen","Country","Signal","Score","Type","First / Last Confirmed",""].map(h=>(
                 <th key={h} style={{padding:"10px 14px",textAlign:"left",color:C.muted,fontSize:10,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
               ))}
             </tr>
@@ -1121,9 +1122,14 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
                     )}
                   </td>
                   <td style={{padding:"12px 14px"}}>
-                    <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:10,color:C.muted}}>
+                    <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:10,color:C.muted}}>
                       {a.created_at ? new Date(a.created_at).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : "—"}
-                    </span>
+                    </div>
+                    {a.updated_at && a.updated_at !== a.created_at && (
+                      <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:9,color:C.teal,marginTop:2}}>
+                        {"↻ " + new Date(a.updated_at).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
+                      </div>
+                    )}
                   </td>
                   <td style={{padding:"12px 14px",color:C.accent,fontSize:12}}>›</td>
                 </tr>
@@ -1132,17 +1138,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
           </tbody>
         </table>
         <div style={{padding:"10px 14px",borderTop:"1px solid " + C.border,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:C.muted}}>
-          <span>
-            Showing {filtered.length} of {deduped.length} alerts
-            {timeWindow !== "all" && (
-              <span style={{color:C.teal,marginLeft:6}}>
-                {"· " + timeWindow + " filter active — "}
-                <button onClick={function(){setTimeWindow("all");}} style={{background:"none",border:"none",color:C.teal,cursor:"pointer",fontSize:11,padding:0,textDecoration:"underline"}}>
-                  clear to show all
-                </button>
-              </span>
-            )}
-          </span>
+          <span>Showing {filtered.length} of {alerts.length} alerts</span>
         </div>
       </div>
     </div>
@@ -2495,12 +2491,6 @@ export default function App() {
     setScreen("operations");
   }, []);
 
-  // Called by ThreatOperations on mount — resets the initial time window so that
-  // navigating away and back always opens with "All Time" rather than a stale window.
-  const handleOpMounted = useCallback(() => {
-    setOpInitialTimeWindow("all");
-  }, []);
-
   const nav = (id) => { setScreen(id); setMobOpen(false); };
 
   return (
@@ -2542,7 +2532,7 @@ export default function App() {
           </div>
 
           {screen==="command"     && <CommandCenter      onInvestigate={handleInvestigate} setScreen={setScreen} onViewCriticalToday={handleViewCriticalToday}/>}
-          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate} initialTab={opInitialTab} initialSort={opInitialSort} initialTimeWindow={opInitialTimeWindow} onMounted={handleOpMounted}/>}
+          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate} initialTab={opInitialTab} initialSort={opInitialSort} initialTimeWindow={opInitialTimeWindow}/>}
           {screen==="emergence"   && <EmergenceRadarScreen onInvestigate={handleInvestigate}/>}
           {screen==="genomic"     && <GenomicIntelligence onInvestigate={handleInvestigate}/>}
           {screen==="investigate" && <AlertInvestigation  alert={invAlert}/>}

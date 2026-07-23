@@ -4,18 +4,18 @@ AMR-Sentinel — Alert Writer
 Reads enriched alerts from output_queue.jsonl and writes them to the
 PostgreSQL alerts table.
 
-Genomic precursor alerts carry extra fields (gene_name, isolate_count,
-doubling_time_years, etc.) that don't exist as typed columns in the alerts
-table. These are packed into the extra_data JSONB column on insert and
-unpacked by the API on read.
+Idempotency strategy (updated):
+- Phenotypic alerts: UPSERT — insert on first detection, then UPDATE
+  updated_at + severity_score on every subsequent pipeline run.
+  created_at is NEVER overwritten — it is the immutable lead-time anchor.
+  updated_at = "last confirmed active by pipeline" — what time filters
+  (Yesterday, This Week) compare against.
+- Genomic precursor alerts: UPSERT — insert on first run, update
+  severity/extra_data + updated_at on subsequent runs.
 
-Idempotency strategy:
-- Phenotypic alerts (trajectory_deviation, rate_spike): skip if UUID exists.
-  The triage agent already generates deterministic UUIDs for these.
-- Genomic precursor alerts: UPSERT — insert on first run, update severity/
-  extra_data on subsequent runs. The detector generates a deterministic UUID
-  from (gene_name, pathogen_name, country_iso3) so the same signal always
-  maps to the same DB row regardless of how many times the pipeline fires.
+This means every daily pipeline run that confirms a signal is still
+active stamps that alert with today's updated_at — preserving the
+continuous surveillance record as the proprietary moat.
 
 Usage:
     python -m amr_sentinel.db.alert_writer
@@ -48,7 +48,6 @@ DEFAULT_QUEUE = (
     / "output_queue.jsonl"
 )
 
-# Fields that live in named columns on the alerts table
 TYPED_COLUMNS = {
     "pipeline_run_id", "pathogen_name", "antibiotic_name", "antibiotic_class",
     "country_iso3", "region_who", "severity_score", "severity_tier",
@@ -58,7 +57,6 @@ TYPED_COLUMNS = {
     "forecast_lower_50", "forecast_upper_50",
 }
 
-# Genomic-specific fields that go into extra_data JSONB
 GENOMIC_EXTRA_FIELDS = {
     "gene_name", "gene_family", "gene_description",
     "isolate_count", "latest_year", "time_series", "time_series_summary",
@@ -71,27 +69,22 @@ GENOMIC_EXTRA_FIELDS = {
 
 def _build_extra_data(row: dict[str, Any]) -> dict[str, Any]:
     """
-    Extract genomic-specific fields from a row dict and return them as
-    a dict suitable for storage in the extra_data JSONB column.
-
-    For phenotypic alerts this will return an empty dict.
-    For genomic precursor alerts this preserves all the intelligence context
-    that the dashboard and API need to render the signal correctly.
+    Extract genomic-specific fields from a row dict for the extra_data JSONB column.
 
     Args:
         row: Raw parsed JSONL row
 
     Returns:
-        Dict of extra fields (may be empty for phenotypic alerts)
+        Dict of extra fields (empty for phenotypic alerts)
     """
     extra = {}
     for field in GENOMIC_EXTRA_FIELDS:
         if field in row and row[field] is not None:
             extra[field] = row[field]
 
-    # Also capture any non-null fields not in either set (future-proofing)
     known = TYPED_COLUMNS | GENOMIC_EXTRA_FIELDS | {
-        "alert_id", "id", "created_at", "cycle_id", "signal_id", "detected_at",
+        "alert_id", "id", "created_at", "updated_at", "cycle_id",
+        "signal_id", "detected_at",
     }
     for k, v in row.items():
         if k not in known and v is not None:
@@ -102,23 +95,16 @@ def _build_extra_data(row: dict[str, Any]) -> dict[str, Any]:
 
 def _parse_alert_row(row: dict[str, Any]) -> dict[str, Any]:
     """
-    Convert a raw JSONL alert dict into a flat dict of column values
-    suitable for SQLAlchemy insert/upsert.
-
-    For genomic precursor alerts, signal_id (the deterministic UUID from the
-    detector) is preferred as the primary key over alert_id/id, so the same
-    gene/pathogen/country always maps to the same DB row.
+    Convert a raw JSONL alert dict into column values for SQLAlchemy upsert.
 
     Args:
         row: Parsed JSON object from output_queue.jsonl
 
     Returns:
-        Dict of column name -> value (not yet committed)
+        Dict of column name -> value
     """
     signal_type = row.get("signal_type", "trajectory_deviation")
 
-    # UUID resolution: genomic precursor alerts carry signal_id (deterministic).
-    # Phenotypic alerts carry alert_id from the triage agent (also deterministic).
     if signal_type == "genomic_precursor" and row.get("signal_id"):
         try:
             alert_id = uuid.UUID(str(row["signal_id"]))
@@ -162,28 +148,27 @@ def _parse_alert_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def write_alerts_from_queue(
     queue_file: Path = DEFAULT_QUEUE,
-    skip_existing: bool = True,
 ) -> dict[str, int]:
     """
-    Read output_queue.jsonl and write each alert to the PostgreSQL alerts table.
+    Read output_queue.jsonl and upsert each alert to the PostgreSQL alerts table.
 
-    Phenotypic alerts (trajectory_deviation, rate_spike) use ON CONFLICT DO NOTHING
-    on both the primary key and the daily uniqueness constraint
-    (uq_phenotypic_alert_daily). First insert per triplet per UTC day wins;
-    all subsequent inserts that day are silently skipped. This makes pipeline
-    re-runs safe while preserving the daily surveillance log as the moat.
+    On first detection: INSERT with created_at = now().
+    On every subsequent pipeline run: UPDATE updated_at = now() (and refresh
+    severity_score, severity_tier, current_resistance, trend_direction,
+    stewardship_guidance, evidence_citations, extra_data).
 
-    Genomic precursor alerts are UPSERTED — inserted on first run, and on
-    subsequent runs the severity_score, severity_tier, and extra_data are
-    updated in-place. This means re-running the pipeline refreshes genomic
-    signal intelligence without accumulating duplicate rows.
+    created_at is NEVER overwritten — it is the immutable lead-time anchor
+    recording exactly when AMR-Intel first detected this signal.
+
+    updated_at records the last pipeline confirmation. Time window filters
+    in the dashboard compare against updated_at, so "Yesterday" always shows
+    every signal the pipeline confirmed active yesterday.
 
     Args:
         queue_file: Path to the JSONL alert queue file
-        skip_existing: If True, skip phenotypic alerts whose UUID already exists
 
     Returns:
-        dict: Counts of inserted, upserted, skipped, and errored alerts
+        dict: Counts of inserted, updated, and errored alerts
 
     Raises:
         FileNotFoundError: If queue_file does not exist
@@ -194,19 +179,17 @@ def write_alerts_from_queue(
     lines = queue_file.read_text(encoding="utf-8").strip().splitlines()
     if not lines:
         logger.info("Queue file is empty — nothing to write.")
-        return {"inserted": 0, "upserted": 0, "skipped": 0, "errored": 0}
+        return {"inserted": 0, "updated": 0, "errored": 0}
 
     logger.info("Reading %d alerts from %s", len(lines), queue_file)
 
-    inserted = upserted = skipped = errored = 0
+    inserted = updated = errored = 0
 
     with get_session() as session:
-        if skip_existing:
-            existing_ids: set[uuid.UUID] = {
-                row[0] for row in session.query(Alert.id).all()
-            }
-        else:
-            existing_ids = set()
+        # Track existing IDs to distinguish insert vs update in logging
+        existing_ids: set[uuid.UUID] = {
+            row[0] for row in session.query(Alert.id).all()
+        }
 
         for i, line in enumerate(lines, 1):
             line = line.strip()
@@ -214,46 +197,47 @@ def write_alerts_from_queue(
                 continue
             try:
                 row = json.loads(line)
-                signal_type = row.get("signal_type", "trajectory_deviation")
                 values = _parse_alert_row(row)
+                alert_id = values["id"]
 
+                # Fields updated on every pipeline confirmation run.
+                # Refreshes intelligence while preserving created_at (lead-time anchor).
+                update_fields = {
+                    "updated_at":          "now()",   # marks "confirmed active today"
+                    "severity_score":      values["severity_score"],
+                    "severity_tier":       values["severity_tier"],
+                    "current_resistance":  values["current_resistance"],
+                    "trend_direction":     values["trend_direction"],
+                    "pipeline_run_id":     values["pipeline_run_id"],
+                }
+
+                # For genomic precursor alerts also refresh intelligence payload
+                signal_type = row.get("signal_type", "trajectory_deviation")
                 if signal_type == "genomic_precursor":
-                    # ON CONFLICT DO NOTHING on both the primary key (id) and
-                    # the triplet uniqueness constraint (uq_genomic_precursor_triplet).
-                    # One genomic precursor per (pathogen, antibiotic, country) forever.
-                    # UUID mismatches across runs no longer cause duplication —
-                    # the constraint catches them regardless of what UUID was generated.
-                    stmt = (
-                        pg_insert(Alert)
-                        .values(**values)
-                        .on_conflict_do_nothing()
-                    )
-                    result = session.execute(stmt)
-                    if values["id"] in existing_ids:
-                        upserted += 1
-                        logger.debug("Genomic alert %s already exists — skipped.", values["id"])
-                    else:
-                        inserted += 1
-                        logger.debug("Genomic alert %s inserted (new).", values["id"])
+                    update_fields["extra_data"] = values["extra_data"]
 
-                else:
-                    # Phenotypic alerts: ON CONFLICT DO NOTHING on both the
-                    # primary key (id) and the daily uniqueness constraint
-                    # (uq_phenotypic_alert_daily). This means:
-                    # - Same UUID same day → silently skipped (PK conflict)
-                    # - Different UUID same triplet same day → silently skipped
-                    #   (daily uniqueness constraint conflict)
-                    # Pipeline re-runs are always safe — first insert wins.
-                    stmt = (
-                        pg_insert(Alert)
-                        .values(**values)
-                        .on_conflict_do_nothing()
+                # For all alerts, refresh bulletin if pipeline regenerated it
+                if values.get("stewardship_guidance"):
+                    update_fields["stewardship_guidance"] = values["stewardship_guidance"]
+                if values.get("evidence_citations"):
+                    update_fields["evidence_citations"] = values["evidence_citations"]
+
+                stmt = (
+                    pg_insert(Alert)
+                    .values(**values)
+                    .on_conflict_do_update(
+                        index_elements=["id"],
+                        set_=update_fields,
                     )
-                    result = session.execute(stmt)
-                    if values["id"] in existing_ids:
-                        skipped += 1
-                    else:
-                        inserted += 1
+                )
+                session.execute(stmt)
+
+                if alert_id in existing_ids:
+                    updated += 1
+                    logger.debug("Alert %s confirmed active — updated_at refreshed.", alert_id)
+                else:
+                    inserted += 1
+                    logger.debug("Alert %s inserted (new signal).", alert_id)
 
             except json.JSONDecodeError as exc:
                 logger.error("Line %d: JSON parse error — %s", i, exc)
@@ -263,11 +247,10 @@ def write_alerts_from_queue(
                 errored += 1
 
     logger.info(
-        "Alert writer complete. Inserted: %d | Upserted (refreshed): %d | "
-        "Skipped: %d | Errored: %d",
-        inserted, upserted, skipped, errored,
+        "Alert writer complete. Inserted (new): %d | Updated (confirmed active): %d | Errored: %d",
+        inserted, updated, errored,
     )
-    return {"inserted": inserted, "upserted": upserted, "skipped": skipped, "errored": errored}
+    return {"inserted": inserted, "updated": updated, "errored": errored}
 
 
 if __name__ == "__main__":
@@ -279,27 +262,19 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser(
-        description="Write alerts from output_queue.jsonl into PostgreSQL."
+        description="Write/upsert alerts from output_queue.jsonl into PostgreSQL."
     )
     parser.add_argument(
         "--queue-file", type=Path, default=DEFAULT_QUEUE,
         help="Path to output_queue.jsonl (default: data/alerts/output_queue.jsonl)",
     )
-    parser.add_argument(
-        "--no-skip", action="store_true",
-        help="Force re-insert phenotypic alerts (genomic always upserts regardless)",
-    )
     args = parser.parse_args()
 
     try:
-        result = write_alerts_from_queue(
-            queue_file=args.queue_file,
-            skip_existing=not args.no_skip,
-        )
+        result = write_alerts_from_queue(queue_file=args.queue_file)
         print(
-            "\nDone. Inserted: " + str(result["inserted"]) +
-            " | Upserted: " + str(result["upserted"]) +
-            " | Skipped: " + str(result["skipped"]) +
+            "\nDone. Inserted (new): " + str(result["inserted"]) +
+            " | Updated (confirmed active): " + str(result["updated"]) +
             " | Errored: " + str(result["errored"])
         )
         sys.exit(0 if result["errored"] == 0 else 1)

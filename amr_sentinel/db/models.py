@@ -11,6 +11,7 @@ Tables:
     signal_validations  — lead-time tracking (Task 5.1)
     emergence_scores    — resistance emergence radar (Task 5.2)
     genomic_signals     — NCBI NDARO genomic signal aggregates (Task 5.8)
+    state_transitions   — tier history per triplet per year (Task 5)
 
 Dependencies:
     sqlalchemy, psycopg2-binary
@@ -88,11 +89,22 @@ class Alert(Base):
     Genomic precursor alerts store their extended fields (gene_name,
     isolate_count, doubling_time_years, time_series, etc.) in the
     extra_data JSONB column, which the API unpacks on read.
+
+    Key timestamps:
+        created_at  — when AMR-Intel FIRST detected this signal (immutable).
+                      This is the lead-time anchor. Never overwritten.
+        updated_at  — when AMR-Intel LAST confirmed this signal is still active.
+                      Updated on every pipeline run via ON CONFLICT DO UPDATE.
+                      This is what time window filters (Yesterday, This Week)
+                      compare against. If updated_at = today, the signal was
+                      confirmed active in today's pipeline run.
     """
     __tablename__ = "alerts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(),
+                        onupdate=func.now(), nullable=False, index=True)
     pipeline_run_id = Column(String(100), nullable=True, index=True)
     pathogen_name = Column(String(255), nullable=False, index=True)
     antibiotic_name = Column(String(255), nullable=False, index=True)
@@ -110,7 +122,6 @@ class Alert(Base):
     stewardship_guidance = Column(Text, nullable=True)
     evidence_citations = Column(JSON, nullable=True)
     routing_target = Column(String(100), nullable=True)
-    # Forecast confidence intervals (Task 5.5)
     forecast_lower_80 = Column(Float, nullable=True)
     forecast_upper_80 = Column(Float, nullable=True)
     forecast_lower_50 = Column(Float, nullable=True)
@@ -118,9 +129,6 @@ class Alert(Base):
     outcome_confirmed = Column(Boolean, nullable=True)
     outcome_notes = Column(Text, nullable=True)
     outcome_recorded_at = Column(DateTime(timezone=True), nullable=True)
-    # Extended fields for genomic precursor alerts and future signal types.
-    # Stores: gene_name, gene_family, isolate_count, doubling_time_years,
-    # days_to_threshold, time_series, surveillance_confidence, etc.
     extra_data = Column(JSONB, nullable=True)
 
     feedback = relationship("Feedback", back_populates="alert",
@@ -133,6 +141,7 @@ class Alert(Base):
         Index("ix_alerts_severity_created", "severity_tier", "created_at"),
         Index("ix_alerts_country_created", "country_iso3", "created_at"),
         Index("ix_alerts_signal_type", "signal_type"),
+        Index("ix_alerts_updated_at", "updated_at"),
     )
 
 
@@ -163,7 +172,7 @@ class Feedback(Base):
 class SignalValidation(Base):
     """
     Lead-time tracking — when AMR-Sentinel detected vs official recognition.
-    The headline Abuja demo metric.
+    The headline demo metric.
     """
     __tablename__ = "signal_validations"
 
@@ -237,7 +246,6 @@ class GenomicSignal(Base):
     """
     Aggregated genomic signal from NCBI NDARO.
     One row per (gene_name, pathogen_name, country_iso3, year).
-    Isolate count = number of clinical isolates carrying the gene that year.
     """
     __tablename__ = "genomic_signals"
 
@@ -268,30 +276,11 @@ class GenomicSignal(Base):
             f"{self.country_iso3} year={self.year} n={self.isolate_count}>"
         )
 
+
 class StateTransition(Base):
     """
     State Transition Tracker — append-mode history of resistance tier
     per triplet per year.
-
-    One row per (pathogen, antibiotic, country, year). Records the
-    resistance tier at that point in time:
-        STABLE      — resistance low, no acceleration
-        WATCH       — resistance low but accelerating
-        EMERGING    — new or rapidly rising resistance
-        CRITICAL    — resistance high (>25%) or above threshold
-        IMPROVING   — resistance previously high, now declining
-
-    Answers:
-        "Which threats moved from WATCH to EMERGING fastest?"
-        "Which countries show IMPROVING transitions after intervention?"
-        "How long did Croatia take to go from WATCH to CRITICAL?"
-
-    Populated by:
-        python -m amr_sentinel.models.state_transition_tracker
-
-    Used by:
-        GET /alerts/{id}/history — timeline for Alert Investigation History tab
-        GET /state-transitions?pathogen=...&country=... — full history query
     """
     __tablename__ = "state_transitions"
 
@@ -304,20 +293,13 @@ class StateTransition(Base):
     resistance_rate = Column(Float, nullable=True)
     sample_count = Column(Integer, nullable=True)
     data_source = Column(String(50), nullable=True)
-
-    # Tier at this point in time
-    tier = Column(String(20), nullable=False)  # STABLE/WATCH/EMERGING/CRITICAL/IMPROVING
-
-    # Context for the transition
-    previous_tier = Column(String(20), nullable=True)  # NULL for first observation
+    tier = Column(String(20), nullable=False)
+    previous_tier = Column(String(20), nullable=True)
     tier_changed = Column(Boolean, nullable=False, default=False)
     years_in_previous_tier = Column(SmallInteger, nullable=True)
-
-    # Quantitative signals
-    rate_change_1yr = Column(Float, nullable=True)   # absolute change vs prior year
-    rate_change_3yr = Column(Float, nullable=True)   # absolute change vs 3 years prior
-    acceleration = Column(Float, nullable=True)       # 2nd derivative (rate of rate change)
-
+    rate_change_1yr = Column(Float, nullable=True)
+    rate_change_3yr = Column(Float, nullable=True)
+    acceleration = Column(Float, nullable=True)
     computed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     __table_args__ = (
