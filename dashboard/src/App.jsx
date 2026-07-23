@@ -929,14 +929,18 @@ function matchesTimeWindow(a, timeWindow) {
   return true;
 }
 
-function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeWindow }) {
+function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeWindow, onMounted }) {
   const [alerts,     setAlerts]     = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [search,     setSearch]     = useState("");
   const [tab,        setTab]        = useState(initialTab || "all");
   const [sortBy,     setSortBy]     = useState(initialSort || "severity_score");
   const [filters,    setFilters]    = useState({ pathogen:"all", antibiotic:"all", region:"all" });
+  // Default to "all" — never inherit a stale time window from a previous navigation
   const [timeWindow, setTimeWindow] = useState(initialTimeWindow || "all");
+
+  // Notify parent to reset initialTimeWindow so back-navigation always starts at "All Time"
+  useEffect(function() { if (onMounted) onMounted(); }, []);
 
   useEffect(() => {
     // Genomic alerts score lower than many phenotypic alerts, so a plain
@@ -971,7 +975,8 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
     });
   })();
 
-  // Tab counts use deduped dataset — one row per threat, most recent detection.
+  // Tab counts always reflect ALL deduped alerts regardless of active time window.
+  // This way the tab labels never show 0 and mislead users into thinking data is missing.
   const tabCounts = {
     all:      deduped.length,
     critical: deduped.filter(a=>a.severity_tier==="critical").length,
@@ -979,6 +984,8 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
     watch:    deduped.filter(a=>a.severity_tier==="monitor").length,
     genomic:  deduped.filter(a=>a.signal_type==="genomic_precursor").length,
   };
+  // Separate count for time-filtered results shown in table footer
+  const filteredByTime = deduped.filter(a => matchesTimeWindow(a, timeWindow));
 
   const filtered = deduped
     .filter(a => matchesTimeWindow(a, timeWindow))
@@ -1125,7 +1132,17 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
           </tbody>
         </table>
         <div style={{padding:"10px 14px",borderTop:"1px solid " + C.border,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:C.muted}}>
-          <span>Showing {filtered.length} of {alerts.length} alerts</span>
+          <span>
+            Showing {filtered.length} of {deduped.length} alerts
+            {timeWindow !== "all" && (
+              <span style={{color:C.teal,marginLeft:6}}>
+                {"· " + timeWindow + " filter active — "}
+                <button onClick={function(){setTimeWindow("all");}} style={{background:"none",border:"none",color:C.teal,cursor:"pointer",fontSize:11,padding:0,textDecoration:"underline"}}>
+                  clear to show all
+                </button>
+              </span>
+            )}
+          </span>
         </div>
       </div>
     </div>
@@ -2478,6 +2495,12 @@ export default function App() {
     setScreen("operations");
   }, []);
 
+  // Called by ThreatOperations on mount — resets the initial time window so that
+  // navigating away and back always opens with "All Time" rather than a stale window.
+  const handleOpMounted = useCallback(() => {
+    setOpInitialTimeWindow("all");
+  }, []);
+
   const nav = (id) => { setScreen(id); setMobOpen(false); };
 
   return (
@@ -2519,7 +2542,7 @@ export default function App() {
           </div>
 
           {screen==="command"     && <CommandCenter      onInvestigate={handleInvestigate} setScreen={setScreen} onViewCriticalToday={handleViewCriticalToday}/>}
-          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate} initialTab={opInitialTab} initialSort={opInitialSort} initialTimeWindow={opInitialTimeWindow}/>}
+          {screen==="operations"  && <ThreatOperations   onInvestigate={handleInvestigate} initialTab={opInitialTab} initialSort={opInitialSort} initialTimeWindow={opInitialTimeWindow} onMounted={handleOpMounted}/>}
           {screen==="emergence"   && <EmergenceRadarScreen onInvestigate={handleInvestigate}/>}
           {screen==="genomic"     && <GenomicIntelligence onInvestigate={handleInvestigate}/>}
           {screen==="investigate" && <AlertInvestigation  alert={invAlert}/>}
