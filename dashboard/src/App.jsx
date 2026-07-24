@@ -883,7 +883,7 @@ function buildTimeOptions(alerts) {
   // Collect distinct YYYY-MM months from updated_at (confirmation date)
   var seen = {};
   alerts.forEach(function(a) {
-    var ts = a.updated_at || a.created_at;
+    var ts = a.created_at;
     if (!ts) return;
     var d = new Date(ts);
     var key = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
@@ -907,10 +907,9 @@ function buildTimeOptions(alerts) {
 // for a continuous surveillance system.
 function matchesTimeWindow(a, timeWindow) {
   if (timeWindow === "all") return true;
-  // Always use created_at for time window filtering.
-  // The pipeline writes one new row per triplet per UTC day with a date-scoped UUID.
-  // created_at reflects which day the pipeline detected/confirmed this signal.
-  var ts = a.created_at;
+  // Prefer updated_at (pipeline confirmation stamp); fall back to created_at
+  // for alerts written before the updated_at column existed.
+  var ts = a.updated_at || a.created_at;
   if (!ts) return false;
   var now = new Date();
   var d   = new Date(ts);
@@ -944,11 +943,8 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
   const [search,     setSearch]     = useState("");
   const [tab,        setTab]        = useState(initialTab || "all");
   const [sortBy,     setSortBy]     = useState(initialSort || "severity_score");
-  const [page,       setPage]       = useState(1);
-  var PAGE_SIZE = 50;
-
-  // Reset to page 1 when filters change (must be with hooks)
-  useEffect(function(){ setPage(1); }, [tab, timeWindow, search, filters.pathogen, filters.antibiotic, filters.region]);
+  const [_page,      _setPage]      = useState(1);
+  var _PS = 50;
   const [filters,    setFilters]    = useState({ pathogen:"all", antibiotic:"all", region:"all" });
   const [timeWindow, setTimeWindow] = useState(initialTimeWindow || "all");
 
@@ -970,49 +966,32 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
 
   // Deduplicate phenotypic alerts by (pathogen, antibiotic, country) — keep most recent.
   // The full history is preserved in the DB and accessible via Alert Investigation.
-  // DESIGN: Pipeline writes one new row per triplet per UTC day (date-scoped UUID).
-  // Correct approach: filter by time window FIRST, then deduplicate within that window.
-  // "Today" -> dedup only Jul 24 rows -> shows Jul 24 data.
-  // "Yesterday" -> dedup only Jul 23 rows -> shows Jul 23 data.
-  // "All Time" -> dedup across all rows -> keeps newest per triplet.
-  // Tab counts use ALL data so tabs never show 0 regardless of time filter.
-
-  // Helper: dedup an array of alerts.
-  // For single-day windows (today/yesterday): one row per triplet, newest wins.
-  // For multi-day windows (week/month/all): one row per triplet per day,
-  // so you see the daily surveillance log — Jul 18, 19, 20... all visible.
-  function dedupAlerts(arr, perDay) {
+  // Filter by time window first, then dedup within that window.
+  // Multi-day windows (week/month/all): one row per triplet per day.
+  // Single-day (today/yesterday): one row per triplet.
+  function _dd(arr, perDay) {
     var seen = {};
-    var sorted = [...arr].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
-    return sorted.filter(a => {
-      var day = perDay ? "|" + (a.created_at||"x").slice(0,10) : "";
-      var key = a.signal_type === "genomic_precursor"
-        ? "g|" + (a.gene_name||"") + "|" + (a.pathogen_name||"") + "|" + (a.country_iso3||"") + day
-        : "p|" + (a.pathogen_name||"") + "|" + (a.antibiotic_name||"") + "|" + (a.country_iso3||"") + day;
-      if (seen[key]) return false;
-      seen[key] = true;
-      return true;
+    var sorted = [...arr].sort(function(x,y){ return new Date(y.created_at||0)-new Date(x.created_at||0); });
+    return sorted.filter(function(a) {
+      var d = perDay ? ("|"+(a.created_at||"x").slice(0,10)) : "";
+      var k = a.signal_type==="genomic_precursor"
+        ? ("g|"+(a.gene_name||"")+"|"+(a.pathogen_name||"")+"|"+(a.country_iso3||"")+d)
+        : ("p|"+(a.pathogen_name||"")+"|"+(a.antibiotic_name||"")+"|"+(a.country_iso3||"")+d);
+      if (seen[k]) return false;
+      seen[k] = true; return true;
     });
   }
-
-  // Single-day windows: one row per triplet (newest wins)
-  // Multi-day windows: one row per triplet per day (full daily log visible)
-  var isMultiDay = (timeWindow === "all" || timeWindow === "week" || timeWindow === "month" || timeWindow.startsWith("m:"));
-
-  // Step 1: time-filter the raw alerts pool
-  var timeFiltered = timeWindow === "all" ? alerts : alerts.filter(a => matchesTimeWindow(a, timeWindow));
-
-  // Step 2: dedup within time window
-  const deduped = dedupAlerts(timeFiltered, isMultiDay);
-
-  // Step 3: dedup ALL alerts for tab counts (always single-row per triplet for counts)
-  var allDeduped = dedupAlerts(alerts, false);
+  var _multi = (timeWindow==="all"||timeWindow==="week"||timeWindow==="month"||timeWindow.startsWith("m:"));
+  var _tw = timeWindow==="all" ? alerts : alerts.filter(function(a){ return matchesTimeWindow(a,timeWindow); });
+  // NOTE: deduped must be declared BEFORE tabCounts to avoid Temporal Dead Zone crash.
+  const deduped = _dd(_tw, _multi);
+  var _all = _dd(alerts, false);
   const tabCounts = {
-    all:      allDeduped.length,
-    critical: allDeduped.filter(a=>a.severity_tier==="critical").length,
-    high:     allDeduped.filter(a=>a.severity_tier==="warn").length,
-    watch:    allDeduped.filter(a=>a.severity_tier==="monitor").length,
-    genomic:  allDeduped.filter(a=>a.signal_type==="genomic_precursor").length,
+    all:      _all.length,
+    critical: _all.filter(function(a){return a.severity_tier==="critical";}).length,
+    high:     _all.filter(function(a){return a.severity_tier==="warn";}).length,
+    watch:    _all.filter(function(a){return a.severity_tier==="monitor";}).length,
+    genomic:  _all.filter(function(a){return a.signal_type==="genomic_precursor";}).length,
   };
 
   const filtered = deduped
@@ -1027,9 +1006,8 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
       return (b.current_resistance||0)-(a.current_resistance||0);
     });
 
-  // Pagination — computed after filtered is ready
-  var pageCount = Math.ceil(filtered.length / PAGE_SIZE);
-  var paginated = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
+  var _pc = Math.ceil(filtered.length / _PS);
+  var _pg = filtered.slice((_page-1)*_PS, _page*_PS);
 
   if (loading) return <Spinner />;
 
@@ -1107,7 +1085,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
           <tbody>
             {filtered.length===0 ? (
               <tr><td colSpan={8}><Empty msg="No alerts match your filters"/></td></tr>
-            ) : paginated.map((a,i) => {
+            ) : _pg.map((a,i) => {
               const isGenomic = a.signal_type === "genomic_precursor";
               return (
                 <tr key={a.alert_id||a.id||i}
@@ -1168,18 +1146,14 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
           </tbody>
         </table>
         <div style={{padding:"10px 14px",borderTop:"1px solid " + C.border,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:C.muted}}>
-          <span>{"Showing " + paginated.length + " of " + filtered.length + " alerts"}</span>
-          {pageCount > 1 && (
-            <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <button onClick={function(){setPage(function(p){return Math.max(1,p-1);});}} disabled={page===1}
-                style={{background:C.surfaceHigh,border:"1px solid "+C.border,color:page===1?C.muted:C.white,borderRadius:4,padding:"3px 10px",cursor:page===1?"default":"pointer",fontSize:12}}>
-                {"<"}
-              </button>
-              <span style={{color:C.white}}>{"Page " + page + " of " + pageCount}</span>
-              <button onClick={function(){setPage(function(p){return Math.min(pageCount,p+1);});}} disabled={page===pageCount}
-                style={{background:C.surfaceHigh,border:"1px solid "+C.border,color:page===pageCount?C.muted:C.white,borderRadius:4,padding:"3px 10px",cursor:page===pageCount?"default":"pointer",fontSize:12}}>
-                {">"}
-              </button>
+          <span>{"Showing "+_pg.length+" of "+filtered.length+" alerts"}</span>
+          {_pc>1 && (
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <button onClick={function(){_setPage(function(p){return Math.max(1,p-1);});}} disabled={_page===1}
+                style={{background:C.surfaceHigh,border:"1px solid "+C.border,color:_page===1?C.muted:C.white,borderRadius:4,padding:"4px 12px",cursor:_page===1?"default":"pointer",fontSize:12}}>{"<"}</button>
+              <span style={{color:C.muted,fontSize:11}}>{"Page "+_page+" / "+_pc}</span>
+              <button onClick={function(){_setPage(function(p){return Math.min(_pc,p+1);});}} disabled={_page===_pc}
+                style={{background:C.surfaceHigh,border:"1px solid "+C.border,color:_page===_pc?C.muted:C.white,borderRadius:4,padding:"4px 12px",cursor:_page===_pc?"default":"pointer",fontSize:12}}>{">"}</button>
             </div>
           )}
         </div>
@@ -1199,6 +1173,8 @@ function EmergenceRadarScreen({ onInvestigate }) {
       setLoading(false);
     });
   }, []);
+
+  useEffect(function(){ _setPage(1); }, [tab, timeWindow, search]);
 
   if (loading) return <Spinner />;
 
