@@ -755,6 +755,13 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
     });
   }, []);
 
+  // Reset to page 1 whenever filters/tab/timeWindow/search change
+  var pageCount = Math.ceil(filtered.length / PAGE_SIZE);
+  var paginated = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
+
+  // Reset to page 1 when filters change
+  useEffect(function(){ setPage(1); }, [tab, timeWindow, search, filters.pathogen, filters.antibiotic, filters.region]);
+
   if (loading) return <Spinner />;
 
   const avgLead = stats?.avg_lead_time_days || 245;
@@ -944,6 +951,8 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
   const [search,     setSearch]     = useState("");
   const [tab,        setTab]        = useState(initialTab || "all");
   const [sortBy,     setSortBy]     = useState(initialSort || "severity_score");
+  const [page,       setPage]       = useState(1);
+  var PAGE_SIZE = 50;
   const [filters,    setFilters]    = useState({ pathogen:"all", antibiotic:"all", region:"all" });
   const [timeWindow, setTimeWindow] = useState(initialTimeWindow || "all");
 
@@ -972,28 +981,36 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
   // "All Time" -> dedup across all rows -> keeps newest per triplet.
   // Tab counts use ALL data so tabs never show 0 regardless of time filter.
 
-  // Helper: dedup an array of alerts, newest created_at wins per triplet
-  function dedupAlerts(arr) {
+  // Helper: dedup an array of alerts.
+  // For single-day windows (today/yesterday): one row per triplet, newest wins.
+  // For multi-day windows (week/month/all): one row per triplet per day,
+  // so you see the daily surveillance log — Jul 18, 19, 20... all visible.
+  function dedupAlerts(arr, perDay) {
     var seen = {};
     var sorted = [...arr].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
     return sorted.filter(a => {
+      var day = perDay ? "|" + (a.created_at||"x").slice(0,10) : "";
       var key = a.signal_type === "genomic_precursor"
-        ? "g|" + (a.gene_name||"") + "|" + (a.pathogen_name||"") + "|" + (a.country_iso3||"")
-        : "p|" + (a.pathogen_name||"") + "|" + (a.antibiotic_name||"") + "|" + (a.country_iso3||"");
+        ? "g|" + (a.gene_name||"") + "|" + (a.pathogen_name||"") + "|" + (a.country_iso3||"") + day
+        : "p|" + (a.pathogen_name||"") + "|" + (a.antibiotic_name||"") + "|" + (a.country_iso3||"") + day;
       if (seen[key]) return false;
       seen[key] = true;
       return true;
     });
   }
 
+  // Single-day windows: one row per triplet (newest wins)
+  // Multi-day windows: one row per triplet per day (full daily log visible)
+  var isMultiDay = (timeWindow === "all" || timeWindow === "week" || timeWindow === "month" || timeWindow.startsWith("m:"));
+
   // Step 1: time-filter the raw alerts pool
   var timeFiltered = timeWindow === "all" ? alerts : alerts.filter(a => matchesTimeWindow(a, timeWindow));
 
-  // Step 2: dedup within time window (what the table shows)
-  const deduped = dedupAlerts(timeFiltered);
+  // Step 2: dedup within time window
+  const deduped = dedupAlerts(timeFiltered, isMultiDay);
 
-  // Step 3: dedup ALL alerts for tab counts (always shows full totals)
-  var allDeduped = dedupAlerts(alerts);
+  // Step 3: dedup ALL alerts for tab counts (always single-row per triplet for counts)
+  var allDeduped = dedupAlerts(alerts, false);
   const tabCounts = {
     all:      allDeduped.length,
     critical: allDeduped.filter(a=>a.severity_tier==="critical").length,
@@ -1090,7 +1107,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
           <tbody>
             {filtered.length===0 ? (
               <tr><td colSpan={8}><Empty msg="No alerts match your filters"/></td></tr>
-            ) : filtered.map((a,i) => {
+            ) : paginated.map((a,i) => {
               const isGenomic = a.signal_type === "genomic_precursor";
               return (
                 <tr key={a.alert_id||a.id||i}
@@ -1151,7 +1168,20 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
           </tbody>
         </table>
         <div style={{padding:"10px 14px",borderTop:"1px solid " + C.border,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:C.muted}}>
-          <span>Showing {filtered.length} of {alerts.length} alerts</span>
+          <span>{"Showing " + paginated.length + " of " + filtered.length + " alerts"}</span>
+          {pageCount > 1 && (
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <button onClick={function(){setPage(function(p){return Math.max(1,p-1);});}} disabled={page===1}
+                style={{background:C.surfaceHigh,border:"1px solid "+C.border,color:page===1?C.muted:C.white,borderRadius:4,padding:"3px 10px",cursor:page===1?"default":"pointer",fontSize:12}}>
+                {"<"}
+              </button>
+              <span style={{color:C.white}}>{"Page " + page + " of " + pageCount}</span>
+              <button onClick={function(){setPage(function(p){return Math.min(pageCount,p+1);});}} disabled={page===pageCount}
+                style={{background:C.surfaceHigh,border:"1px solid "+C.border,color:page===pageCount?C.muted:C.white,borderRadius:4,padding:"3px 10px",cursor:page===pageCount?"default":"pointer",fontSize:12}}>
+                {">"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
