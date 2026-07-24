@@ -755,13 +755,6 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
     });
   }, []);
 
-  // Reset to page 1 whenever filters/tab/timeWindow/search change
-  var pageCount = Math.ceil(filtered.length / PAGE_SIZE);
-  var paginated = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
-
-  // Reset to page 1 when filters change
-  useEffect(function(){ setPage(1); }, [tab, timeWindow, search, filters.pathogen, filters.antibiotic, filters.region]);
-
   if (loading) return <Spinner />;
 
   const avgLead = stats?.avg_lead_time_days || 245;
@@ -953,6 +946,9 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
   const [sortBy,     setSortBy]     = useState(initialSort || "severity_score");
   const [page,       setPage]       = useState(1);
   var PAGE_SIZE = 50;
+
+  // Reset to page 1 when filters change (must be with hooks)
+  useEffect(function(){ setPage(1); }, [tab, timeWindow, search, filters.pathogen, filters.antibiotic, filters.region]);
   const [filters,    setFilters]    = useState({ pathogen:"all", antibiotic:"all", region:"all" });
   const [timeWindow, setTimeWindow] = useState(initialTimeWindow || "all");
 
@@ -1030,6 +1026,10 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
       if (sortBy === "created_at") return new Date(b.created_at||0) - new Date(a.created_at||0);
       return (b.current_resistance||0)-(a.current_resistance||0);
     });
+
+  // Pagination — computed after filtered is ready
+  var pageCount = Math.ceil(filtered.length / PAGE_SIZE);
+  var paginated = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
 
   if (loading) return <Spinner />;
 
