@@ -880,10 +880,10 @@ function buildTimeOptions(alerts) {
     {value:"week",   label:"This Week"},
     {value:"month",  label:"This Month"},
   ];
-  // Collect distinct YYYY-MM months from created_at
+  // Collect distinct YYYY-MM months from updated_at (confirmation date)
   var seen = {};
   alerts.forEach(function(a) {
-    var ts = a.created_at;
+    var ts = a.updated_at || a.created_at;
     if (!ts) return;
     var d = new Date(ts);
     var key = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
@@ -907,11 +907,9 @@ function buildTimeOptions(alerts) {
 // for a continuous surveillance system.
 function matchesTimeWindow(a, timeWindow) {
   if (timeWindow === "all") return true;
-  // Use created_at for time window filtering.
-  // Since the pipeline writes NEW rows daily (each with their own created_at),
-  // the dedup picks the newest created_at row per triplet.
-  // "Today" = newest row created today. "Yesterday" = newest row created yesterday.
-  var ts = a.created_at;
+  // Prefer updated_at (pipeline confirmation stamp); fall back to created_at
+  // for alerts written before the updated_at column existed.
+  var ts = a.updated_at || a.created_at;
   if (!ts) return false;
   var now = new Date();
   var d   = new Date(ts);
@@ -966,14 +964,17 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
 
   // Deduplicate phenotypic alerts by (pathogen, antibiotic, country) — keep most recent.
   // The full history is preserved in the DB and accessible via Alert Investigation.
-  // Deduplicate all alerts — one visible row per unique threat.
-  // Sort by created_at DESC so the newest detection wins dedup for each triplet.
-  // Genomic alerts deduplicated by gene+pathogen+country.
-  // Phenotypic alerts deduplicated by pathogen+antibiotic+country.
-  // NOTE: deduped must be declared BEFORE tabCounts to avoid Temporal Dead Zone crash.
-  const deduped = (() => {
+  // DESIGN: Pipeline writes one new row per triplet per UTC day (date-scoped UUID).
+  // Correct approach: filter by time window FIRST, then deduplicate within that window.
+  // "Today" -> dedup only Jul 24 rows -> shows Jul 24 data.
+  // "Yesterday" -> dedup only Jul 23 rows -> shows Jul 23 data.
+  // "All Time" -> dedup across all rows -> keeps newest per triplet.
+  // Tab counts use ALL data so tabs never show 0 regardless of time filter.
+
+  // Helper: dedup an array of alerts, newest created_at wins per triplet
+  function dedupAlerts(arr) {
     var seen = {};
-    var sorted = [...alerts].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
+    var sorted = [...arr].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
     return sorted.filter(a => {
       var key = a.signal_type === "genomic_precursor"
         ? "g|" + (a.gene_name||"") + "|" + (a.pathogen_name||"") + "|" + (a.country_iso3||"")
@@ -982,19 +983,25 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
       seen[key] = true;
       return true;
     });
-  })();
+  }
 
-  // Tab counts use deduped dataset — one row per threat, most recent detection.
+  // Step 1: time-filter the raw alerts pool
+  var timeFiltered = timeWindow === "all" ? alerts : alerts.filter(a => matchesTimeWindow(a, timeWindow));
+
+  // Step 2: dedup within time window (what the table shows)
+  const deduped = dedupAlerts(timeFiltered);
+
+  // Step 3: dedup ALL alerts for tab counts (always shows full totals)
+  var allDeduped = dedupAlerts(alerts);
   const tabCounts = {
-    all:      deduped.length,
-    critical: deduped.filter(a=>a.severity_tier==="critical").length,
-    high:     deduped.filter(a=>a.severity_tier==="warn").length,
-    watch:    deduped.filter(a=>a.severity_tier==="monitor").length,
-    genomic:  deduped.filter(a=>a.signal_type==="genomic_precursor").length,
+    all:      allDeduped.length,
+    critical: allDeduped.filter(a=>a.severity_tier==="critical").length,
+    high:     allDeduped.filter(a=>a.severity_tier==="warn").length,
+    watch:    allDeduped.filter(a=>a.severity_tier==="monitor").length,
+    genomic:  allDeduped.filter(a=>a.signal_type==="genomic_precursor").length,
   };
 
   const filtered = deduped
-    .filter(a => matchesTimeWindow(a, timeWindow))
     .filter(a => tab==="all" || (tab==="critical"&&a.severity_tier==="critical") || (tab==="high"&&a.severity_tier==="warn") || (tab==="watch"&&a.severity_tier==="monitor") || (tab==="genomic"&&a.signal_type==="genomic_precursor"))
     .filter(a => !search || (a.pathogen_name||"").toLowerCase().includes(search.toLowerCase()) || (a.antibiotic_name||"").toLowerCase().includes(search.toLowerCase()) || (a.country_iso3||"").toLowerCase().includes(search.toLowerCase()) || (a.gene_name||"").toLowerCase().includes(search.toLowerCase()))
     .filter(a => filters.pathogen==="all" || a.pathogen_name===filters.pathogen)
