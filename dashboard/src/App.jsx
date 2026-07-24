@@ -909,7 +909,7 @@ function matchesTimeWindow(a, timeWindow) {
   if (timeWindow === "all") return true;
   // Prefer updated_at (pipeline confirmation stamp); fall back to created_at
   // for alerts written before the updated_at column existed.
-  var ts = a.updated_at || a.created_at;
+  var ts = a.created_at;
   if (!ts) return false;
   var now = new Date();
   var d   = new Date(ts);
