@@ -880,10 +880,10 @@ function buildTimeOptions(alerts) {
     {value:"week",   label:"This Week"},
     {value:"month",  label:"This Month"},
   ];
-  // Collect distinct YYYY-MM months from updated_at (confirmation date)
+  // Collect distinct YYYY-MM months from created_at
   var seen = {};
   alerts.forEach(function(a) {
-    var ts = a.updated_at || a.created_at;
+    var ts = a.created_at;
     if (!ts) return;
     var d = new Date(ts);
     var key = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
@@ -907,9 +907,11 @@ function buildTimeOptions(alerts) {
 // for a continuous surveillance system.
 function matchesTimeWindow(a, timeWindow) {
   if (timeWindow === "all") return true;
-  // Prefer updated_at (pipeline confirmation stamp); fall back to created_at
-  // for alerts written before the updated_at column existed.
-  var ts = a.updated_at || a.created_at;
+  // Use created_at for time window filtering.
+  // Since the pipeline writes NEW rows daily (each with their own created_at),
+  // the dedup picks the newest created_at row per triplet.
+  // "Today" = newest row created today. "Yesterday" = newest row created yesterday.
+  var ts = a.created_at;
   if (!ts) return false;
   var now = new Date();
   var d   = new Date(ts);
@@ -964,17 +966,14 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
 
   // Deduplicate phenotypic alerts by (pathogen, antibiotic, country) — keep most recent.
   // The full history is preserved in the DB and accessible via Alert Investigation.
-  // Deduplicate all alerts — one row per unique threat signal.
-  // Sort by updated_at desc so the most recently confirmed alert wins when
-  // two rows share the same triplet key (e.g. duplicate genomic rows).
+  // Deduplicate all alerts — one visible row per unique threat.
+  // Sort by created_at DESC so the newest detection wins dedup for each triplet.
+  // Genomic alerts deduplicated by gene+pathogen+country.
+  // Phenotypic alerts deduplicated by pathogen+antibiotic+country.
   // NOTE: deduped must be declared BEFORE tabCounts to avoid Temporal Dead Zone crash.
   const deduped = (() => {
     var seen = {};
-    var sorted = [...alerts].sort((a,b) => {
-      var ta = new Date(a.updated_at || a.created_at || 0);
-      var tb = new Date(b.updated_at || b.created_at || 0);
-      return tb - ta;
-    });
+    var sorted = [...alerts].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
     return sorted.filter(a => {
       var key = a.signal_type === "genomic_precursor"
         ? "g|" + (a.gene_name||"") + "|" + (a.pathogen_name||"") + "|" + (a.country_iso3||"")
@@ -1003,7 +1002,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
     .filter(a => filters.region==="all" || getRegion(a)===filters.region)
     .sort((a,b) => {
       if (sortBy === "severity_score") return (b.severity_score||0)-(a.severity_score||0);
-      if (sortBy === "created_at") return new Date(b.updated_at||b.created_at||0) - new Date(a.updated_at||a.created_at||0);
+      if (sortBy === "created_at") return new Date(b.created_at||0) - new Date(a.created_at||0);
       return (b.current_resistance||0)-(a.current_resistance||0);
     });
 
