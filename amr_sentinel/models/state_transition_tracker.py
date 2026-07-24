@@ -301,8 +301,24 @@ def write_transitions(
     inserted = updated = 0
     BATCH = 500
 
-    for i in range(0, len(transition_rows), BATCH):
-        batch = transition_rows[i:i + BATCH]
+    # Deduplicate transition_rows before batching.
+    # The same (pathogen, antibiotic, country, year) can appear from multiple
+    # sources (GLASS + ECDC same year). Keep the row with the most sample data
+    # or the last one seen — PostgreSQL rejects ON CONFLICT DO UPDATE when the
+    # same constraint key appears twice in a single batch.
+    seen_keys: dict = {}
+    for row in transition_rows:
+        key = (row["pathogen_name"], row["antibiotic_name"], row["country_iso3"], row["year"])
+        # Prefer row with sample_count over one without
+        if key not in seen_keys:
+            seen_keys[key] = row
+        elif row.get("sample_count") and not seen_keys[key].get("sample_count"):
+            seen_keys[key] = row
+    deduped_rows = list(seen_keys.values())
+    logger.info("Deduplicated %d -> %d rows before write", len(transition_rows), len(deduped_rows))
+
+    for i in range(0, len(deduped_rows), BATCH):
+        batch = deduped_rows[i:i + BATCH]
         stmt = (
             pg_insert(StateTransition)
             .values(batch)
