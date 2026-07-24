@@ -907,9 +907,10 @@ function buildTimeOptions(alerts) {
 // for a continuous surveillance system.
 function matchesTimeWindow(a, timeWindow) {
   if (timeWindow === "all") return true;
-  // Prefer updated_at (pipeline confirmation stamp); fall back to created_at
-  // for alerts written before the updated_at column existed.
-  var ts = a.updated_at || a.created_at;
+  // Always use created_at for time window filtering.
+  // The pipeline writes one new row per triplet per UTC day with a date-scoped UUID.
+  // created_at reflects which day the pipeline detected/confirmed this signal.
+  var ts = a.created_at;
   if (!ts) return false;
   var now = new Date();
   var d   = new Date(ts);
