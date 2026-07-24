@@ -964,15 +964,21 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
 
   // Deduplicate phenotypic alerts by (pathogen, antibiotic, country) — keep most recent.
   // The full history is preserved in the DB and accessible via Alert Investigation.
-  // Genomic precursor alerts are always one-per-triplet (DB constraint) so no dedup needed.
-  // NOTE: deduped must be declared BEFORE tabCounts to avoid a Temporal Dead Zone crash.
+  // Deduplicate all alerts — one row per unique threat signal.
+  // Sort by updated_at desc so the most recently confirmed alert wins when
+  // two rows share the same triplet key (e.g. duplicate genomic rows).
+  // NOTE: deduped must be declared BEFORE tabCounts to avoid Temporal Dead Zone crash.
   const deduped = (() => {
     var seen = {};
-    // Sort newest-first so first-seen = most recent
-    var sorted = [...alerts].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
+    var sorted = [...alerts].sort((a,b) => {
+      var ta = new Date(a.updated_at || a.created_at || 0);
+      var tb = new Date(b.updated_at || b.created_at || 0);
+      return tb - ta;
+    });
     return sorted.filter(a => {
-      if (a.signal_type === "genomic_precursor") return true;
-      var key = (a.pathogen_name||"") + "|" + (a.antibiotic_name||"") + "|" + (a.country_iso3||"");
+      var key = a.signal_type === "genomic_precursor"
+        ? "g|" + (a.gene_name||"") + "|" + (a.pathogen_name||"") + "|" + (a.country_iso3||"")
+        : "p|" + (a.pathogen_name||"") + "|" + (a.antibiotic_name||"") + "|" + (a.country_iso3||"");
       if (seen[key]) return false;
       seen[key] = true;
       return true;
@@ -997,7 +1003,7 @@ function ThreatOperations({ onInvestigate, initialTab, initialSort, initialTimeW
     .filter(a => filters.region==="all" || getRegion(a)===filters.region)
     .sort((a,b) => {
       if (sortBy === "severity_score") return (b.severity_score||0)-(a.severity_score||0);
-      if (sortBy === "created_at") return new Date(b.created_at||0) - new Date(a.created_at||0);
+      if (sortBy === "created_at") return new Date(b.updated_at||b.created_at||0) - new Date(a.updated_at||a.created_at||0);
       return (b.current_resistance||0)-(a.current_resistance||0);
     });
 
