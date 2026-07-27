@@ -1174,8 +1174,6 @@ function EmergenceRadarScreen({ onInvestigate }) {
     });
   }, []);
 
-  useEffect(function(){ _setPage(1); }, [tab, timeWindow, search]);
-
   if (loading) return <Spinner />;
 
   return (
