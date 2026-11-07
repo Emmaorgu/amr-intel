@@ -15,6 +15,7 @@ Endpoints:
     GET  /partners/contract
     GET  /partners/template.csv
     POST /partners/validate
+    GET  /evidence/summary
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from amr_sentinel.api.partners_router import router as partners_router
 from amr_sentinel.db.database import SessionLocal, engine
+from amr_sentinel.evidence.summary import get_evidence_summary
 from amr_sentinel.db.models import (
     Alert, EmergenceScore, Feedback, ResistanceRecord, SignalValidation
 )
@@ -843,3 +845,13 @@ def get_state_transitions(
         }
         for r in rows
     ]
+
+
+@app.get("/evidence/summary", tags=["Evidence"])
+def evidence_summary(db: Session = Depends(get_db), _: str = Depends(get_api_key)):
+    """
+    Read-only provenance and coverage summary: sources, ingestion audit,
+    alert activity, validation sample size and per-country coverage.
+    Aggregates only; cached in-process for 60 seconds.
+    """
+    return get_evidence_summary(db)

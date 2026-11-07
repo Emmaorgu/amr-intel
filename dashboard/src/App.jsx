@@ -1,6 +1,6 @@
 /**
  * dashboard/src/App.jsx
- * AMR-Intel — 7-screen dashboard with Genomic Intelligence layer and Data Partners readiness
+ * AMR-Intel — 8-screen dashboard with Genomic Intelligence layer, Evidence and Data Partners readiness
  *
  * Screens:
  *   1. Command Center
@@ -9,7 +9,8 @@
  *   4. Genomic Intelligence  ← NEW
  *   5. Alert Investigation
  *   6. Executive Brief
- *   7. Data Partners  ← NEW (partner-readiness: contract + dry-run validator)
+ *   7. Data Partners  (partner-readiness: contract + dry-run validator)
+ *   8. Evidence       ← NEW (provenance, ingestion audit, validation n, coverage and equity)
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -343,6 +344,7 @@ const NAV = [
   { id:"genomic",     icon:"⬡", label:"Genomic Intelligence" },
   { id:"investigate", icon:"◎", label:"Alert Investigation" },
   { id:"brief",       icon:"▤", label:"Executive Brief" },
+  { id:"evidence",    icon:"◇", label:"Evidence" },
   { id:"partners",    icon:"⇄", label:"Data Partners" },
 ];
 
@@ -759,15 +761,17 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
 
   if (loading) return <Spinner />;
 
-  const avgLead = stats?.avg_lead_time_days || 245;
-  const avgMonths = (avgLead / 30.4).toFixed(1);
+  const avgLead = stats?.avg_lead_time_days || 0;
+  const avgMonths = avgLead > 0 ? (avgLead / 30.4).toFixed(1) : null;
+  const ltLabel = (suffix) => avgMonths !== null ? avgMonths + suffix : "n/a";
+  const validatedCount = stats?.validated_signals_count || 0;
   const ltChartData = (ltimes || []).slice(0, 6).map((v, i) => ({ name: "S" + (i+1), days: v.lead_time_days || 0 }));
 
   return (
     <div className="fade-up" style={{padding:"20px 24px",maxWidth:1400}}>
       <div className="stat-row" style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:12,marginBottom:20}}>
-        <StatCard label="Avg Lead Time" value={avgMonths + "mo"} sub="vs official reports" accent={C.teal}/>
-        <StatCard label="Signals Validated" value={stats?.validated_signals_count || 5} sub="outcome confirmed" accent={C.green}/>
+        <StatCard label="Avg Lead Time" value={ltLabel("mo")} sub="retrospective backtest" accent={C.teal}/>
+        <StatCard label="Signals Validated" value={validatedCount} sub="outcome confirmed" accent={C.green}/>
         <StatCard
           label="Critical Alerts"
           value={stats?.critical_alerts || 0}
@@ -811,7 +815,7 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
               <div style={{flex:1,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:0}}>
                 {[
                   {label:"New Signals",value:stats?.total_alerts||0,delta:"Active alerts"},
-                  {label:"Validated",value:stats?.validated_signals_count||5,delta:"Outcome confirmed"},
+                  {label:"Validated",value:validatedCount,delta:"Outcome confirmed"},
                   {label:"Countries",value:stats?.countries_monitored||14,delta:"Under surveillance"},
                   {label:"Genomic Signals",value:stats?.genomic_signals_total||16882,delta:"NCBI NDARO"},
                 ].map((m,i) => (
@@ -824,8 +828,8 @@ function CommandCenter({ onInvestigate, setScreen, onViewCriticalToday }) {
               </div>
               <div style={{width:160,paddingLeft:14,borderLeft:"1px solid " + C.border}}>
                 <div style={{fontSize:9,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:4}}>Lead Time Performance</div>
-                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:20,fontWeight:700,color:C.teal}}>{avgMonths}mo</div>
-                <div style={{fontSize:9,color:C.muted,marginBottom:6}}>Average Lead Time</div>
+                <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:20,fontWeight:700,color:C.teal}}>{ltLabel("mo")}</div>
+                <div style={{fontSize:9,color:C.muted,marginBottom:6}}>Average Lead Time (backtest)</div>
                 {ltChartData.length > 0 && (
                   <ResponsiveContainer width="100%" height={36}>
                     <LineChart data={ltChartData}>
@@ -2321,8 +2325,10 @@ function ExecutiveBrief({ setScreen }) {
 
   if (loading) return <Spinner />;
 
-  const avgLead = stats?.avg_lead_time_days||245;
-  const avgMonths = (avgLead/30.4).toFixed(1);
+  const avgLead = stats?.avg_lead_time_days || 0;
+  const avgMonths = avgLead > 0 ? (avgLead / 30.4).toFixed(1) : null;
+  const ltLabel = (suffix) => avgMonths !== null ? avgMonths + suffix : "n/a";
+  const validatedCount = stats?.validated_signals_count || 0;
   const tierData = [
     {name:"Critical",value:stats?.critical_alerts||0,color:C.red},
     {name:"High",value:(stats?.total_alerts||0)-(stats?.critical_alerts||0)-(stats?.warn_alerts||0),color:C.amber},
@@ -2347,8 +2353,8 @@ function ExecutiveBrief({ setScreen }) {
       <div className="brief-stat-row stat-row" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:20}}>
         <StatCard label="Critical Threats" value={stats?.critical_alerts||0} sub="Requires immediate attention" accent={C.red}/>
         <StatCard label="Countries Affected" value={stats?.countries_monitored||8} sub="Under active surveillance" accent={C.blue}/>
-        <StatCard label="Avg Lead Time" value={avgMonths + " months"} sub="vs official reports" accent={C.teal}/>
-        <StatCard label="Signals Validated" value={stats?.validated_signals_count||5} sub="outcome confirmed" accent={C.green}/>
+        <StatCard label="Avg Lead Time" value={ltLabel(" months")} sub="retrospective backtest" accent={C.teal}/>
+        <StatCard label="Signals Validated" value={validatedCount} sub="outcome confirmed" accent={C.green}/>
         <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:6,padding:"14px 18px"}}>
           <div style={{fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".08em",textTransform:"uppercase",marginBottom:6}}>Top Threat</div>
           <div style={{fontSize:12,fontWeight:600,color:C.white}}>K. pneumoniae (IPM)</div>
@@ -2387,9 +2393,9 @@ function ExecutiveBrief({ setScreen }) {
 
         <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:18}}>
           <SectionTitle>Lead-Time Performance</SectionTitle>
-          <div style={{fontSize:10,color:C.muted,marginBottom:4}}>Distribution of lead time vs official detection</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:4}}>Retrospective backtest: lead time before the official report</div>
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
-            <span style={{fontSize:10,color:C.muted}}>Avg: <span style={{fontFamily:"JetBrains Mono,monospace",color:C.teal,fontWeight:700}}>{avgMonths} months</span></span>
+            <span style={{fontSize:10,color:C.muted}}>Avg: <span style={{fontFamily:"JetBrains Mono,monospace",color:C.teal,fontWeight:700}}>{ltLabel(" months")}</span></span>
           </div>
           {ltBarData.length>0 ? (
             <ResponsiveContainer width="100%" height={140}>
@@ -2403,8 +2409,8 @@ function ExecutiveBrief({ setScreen }) {
             </ResponsiveContainer>
           ) : (
             <div style={{textAlign:"center",padding:20,color:C.muted,fontSize:12}}>
-              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:32,fontWeight:700,color:C.teal,marginBottom:4}}>{avgMonths}mo</div>
-              avg lead time across {stats?.validated_signals_count||5} validated signals
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:32,fontWeight:700,color:C.teal,marginBottom:4}}>{ltLabel("mo")}</div>
+              avg lead time across {validatedCount} validated signals (retrospective backtest)
             </div>
           )}
         </div>
@@ -2436,7 +2442,7 @@ function ExecutiveBrief({ setScreen }) {
         <table style={{width:"100%",borderCollapse:"collapse"}}>
           <thead>
             <tr style={{borderBottom:"1px solid " + C.border}}>
-              {["Pathogen / Antibiotic","Country","Signal","Trend","Lead Time","First Detected"].map(h=>(
+              {["Pathogen / Antibiotic","Country","Signal","Trend","Avg Lead Time (backtest)","First Detected"].map(h=>(
                 <th key={h} style={{padding:"8px 14px",textAlign:"left",color:C.muted,fontSize:10,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase"}}>{h}</th>
               ))}
             </tr>
@@ -2456,7 +2462,7 @@ function ExecutiveBrief({ setScreen }) {
                   }
                 </td>
                 <td style={{padding:"10px 14px"}}><span style={{fontSize:12,color:a.trend_direction==="rising"?C.red:a.trend_direction==="falling"?C.green:C.muted}}>{a.trend_direction==="rising"?"↑ Rising":a.trend_direction==="falling"?"↓ Falling":"→ Stable"}</span></td>
-                <td style={{padding:"10px 14px"}}><span style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.teal}}>{avgMonths}mo</span></td>
+                <td style={{padding:"10px 14px"}}><span style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,color:C.teal}}>{ltLabel("mo")}</span></td>
                 <td style={{padding:"10px 14px"}}><span style={{fontFamily:"JetBrains Mono,monospace",fontSize:11,color:C.muted}}>{a.created_at?new Date(a.created_at).toLocaleDateString("en-GB",{month:"short",year:"numeric"}):"—"}</span></td>
               </tr>
             ))}
@@ -2861,6 +2867,336 @@ function DataPartners() {
   );
 }
 
+// ─── Screen 8: Evidence ──────────────────────────────────────────────────────
+// Verifiable record of what the platform holds, ingests, detects and validates.
+// Everything shown is read live from /evidence/summary (aggregates only).
+// Zero is shown as zero: a country with no records says so.
+// Reuses PartnerPanel / PartnerChip / PartnerTh from the Data Partners screen.
+function evNum(n) { return (n === null || n === undefined) ? "-" : Number(n).toLocaleString("en-GB"); }
+function evDate(s) { return s ? String(s).slice(0, 10) : "-"; }
+function evYears(a, b) { if (a === null || a === undefined) return "-"; return a === b ? String(a) : a + "-" + b; }
+function evPct(part, whole) { return whole > 0 ? Math.round((part / whole) * 100) + "%" : "-"; }
+
+function EvidenceScreen() {
+  // hooks first (React hooks order rule)
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [search,  setSearch]  = useState("");
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    apiFetch("/evidence/summary").then(d => {
+      setData(d);
+      setLoading(false);
+    });
+  }, []);
+
+  if (loading) return <Spinner />;
+  if (!data) {
+    return (
+      <div className="fade-up" style={{padding:"20px 24px"}}>
+        <h1 style={{fontSize:18,fontWeight:700,color:C.white}}>Evidence and Provenance</h1>
+        <Empty msg="Evidence summary unavailable. The API may be starting up, or the endpoint is not deployed yet."/>
+      </div>
+    );
+  }
+
+  // computed values after hooks and early returns
+  var totals  = data.totals || {};
+  var sources = data.sources || [];
+  var ing     = data.ingestion || { by_source: [], recent_runs: [] };
+  var al      = data.alerts || {};
+  var val     = data.validations || { n: 0, sources: [] };
+  var cov     = (data.coverage && data.coverage.countries) || [];
+  var focus   = (data.coverage && data.coverage.focus) || [];
+  var activity = al.activity_14d || [];
+  var unavailable = data.unavailable || [];
+  function isDown(name) { return unavailable.indexOf(name) >= 0; }
+  var DOWN_MSG = "This section could not be loaded from the database.";
+
+  var actMax = 1;
+  activity.forEach(function(d) { actMax = Math.max(actMax, d.phenotypic + d.genomic); });
+  var actTotal = 0;
+  activity.forEach(function(d) { actTotal += d.phenotypic + d.genomic; });
+
+  var regionMap = {};
+  var phenoTotal = 0;
+  cov.forEach(function(c) {
+    var reg = String(c.region_who || COUNTRY_REGION[c.country_iso3] || "UNMAPPED").toUpperCase();
+    if (!regionMap[reg]) regionMap[reg] = { region: reg, records: 0, countries: 0 };
+    regionMap[reg].records += c.records;
+    if (c.records > 0) regionMap[reg].countries += 1;
+    phenoTotal += c.records;
+  });
+  var regions = Object.keys(regionMap).map(function(k) { return regionMap[k]; })
+    .sort(function(a, b) { return b.records - a.records; });
+
+  var q = search.trim().toLowerCase();
+  var rows = cov.filter(function(c) {
+    return !q || c.country_iso3.toLowerCase().indexOf(q) >= 0 || countryName(c.country_iso3).toLowerCase().indexOf(q) >= 0;
+  });
+  var shown = (showAll || q) ? rows : rows.slice(0, 15);
+
+  var valLine = val.n > 0
+    ? val.n + " validated signal" + (val.n === 1 ? "" : "s") + " recognised by " + (val.sources || []).length +
+      " official source" + ((val.sources || []).length === 1 ? "" : "s")
+    : "No validated signals on record.";
+  var valThin = val.n > 0 && val.n < 10;
+
+  var cellP = {padding:"8px 12px"};
+  var mono = {fontFamily:"JetBrains Mono,monospace",fontSize:11};
+
+  return (
+    <div className="fade-up" style={{padding:"20px 24px",maxWidth:1100}}>
+      <div style={{marginBottom:16}}>
+        <h1 style={{fontSize:18,fontWeight:700,color:C.white}}>Evidence and Provenance</h1>
+        <div style={{fontSize:11,color:C.muted}}>
+          What the platform holds, ingests, detects and validates. Read live from the production database. Generated {evDate(data.generated_at)}.
+        </div>
+      </div>
+
+      {unavailable.length > 0 && (
+        <div style={{marginBottom:14,background:C.amberDim,border:"1px solid " + C.amber + "50",borderRadius:6,padding:"8px 12px",fontSize:11,color:C.amber,lineHeight:1.5}}>
+          Some sections could not be loaded: {unavailable.join(", ")}. Everything else is shown as normal, and unavailable figures appear as a dash rather than zero.
+        </div>
+      )}
+
+      <div className="stat-row" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+        <StatCard label="Phenotypic records" value={evNum(totals.phenotypic_records)} sub={evNum(totals.countries_phenotypic) + " countries"} accent={C.teal}/>
+        <StatCard label="Genomic signal rows" value={evNum(totals.genomic_signal_rows)} sub={evNum(totals.genomic_isolates) + " isolates, " + evNum(totals.countries_genomic) + " countries"} accent={C.purple}/>
+        <StatCard label="Alerts on record" value={evNum(al.total)} sub={"first " + evDate(al.first_alert_at)} accent={C.blue}/>
+        <StatCard label="Last pipeline confirmation" value={evDate(al.last_confirmed_at)} sub={"latest new alert " + evDate(al.last_alert_at)} accent={C.green}/>
+      </div>
+
+      <PartnerPanel title="Data sources">
+        {isDown("sources") ? <Empty msg={DOWN_MSG}/> : (
+        <div className="mob-scroll" style={{border:"1px solid " + C.border,borderRadius:6,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:C.surfaceHigh}}>
+                <PartnerTh>Source</PartnerTh><PartnerTh>Type</PartnerTh><PartnerTh>Records</PartnerTh>
+                <PartnerTh>Countries</PartnerTh><PartnerTh>Years</PartnerTh><PartnerTh>Last ingested</PartnerTh>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map(function(s) {
+                return (
+                  <tr key={s.source} style={{borderTop:"1px solid " + C.border + "30"}}>
+                    <td style={{...cellP,fontSize:12,color:C.white,fontWeight:600}}>{s.label}</td>
+                    <td style={cellP}><PartnerChip text={s.kind === "genomic" ? "GENOMIC" : "PHENOTYPIC"} color={s.kind === "genomic" ? C.purple : C.teal}/></td>
+                    <td style={{...cellP,...mono,color:C.white}}>{evNum(s.records)}{s.kind === "genomic" ? " (" + evNum(s.isolates) + " isolates)" : ""}</td>
+                    <td style={{...cellP,...mono,color:C.mutedHigh}}>{evNum(s.countries)}</td>
+                    <td style={{...cellP,...mono,color:C.mutedHigh}}>{evYears(s.first_year, s.last_year)}</td>
+                    <td style={{...cellP,...mono,color:C.mutedHigh}}>{evDate(s.last_ingested_at)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        )}
+        <div style={{fontSize:10,color:C.muted,marginTop:8}}>Genomic signals (gene presence) are never combined with phenotypic resistance rates.</div>
+      </PartnerPanel>
+
+      <PartnerPanel title="Ingestion audit">
+        {isDown("ingestion") ? <Empty msg={DOWN_MSG}/> : ing.by_source.length === 0 ? <Empty msg="No ingestion runs logged."/> : (
+          <div className="mob-scroll" style={{border:"1px solid " + C.border,borderRadius:6,overflow:"hidden",marginBottom:12}}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead>
+                <tr style={{background:C.surfaceHigh}}>
+                  <PartnerTh>Source</PartnerTh><PartnerTh>Runs</PartnerTh><PartnerTh>Fetched</PartnerTh><PartnerTh>Inserted</PartnerTh>
+                  <PartnerTh>Skipped</PartnerTh><PartnerTh>Errored</PartnerTh><PartnerTh>Statuses</PartnerTh><PartnerTh>Last run</PartnerTh>
+                </tr>
+              </thead>
+              <tbody>
+                {ing.by_source.map(function(s) {
+                  return (
+                    <tr key={s.source} style={{borderTop:"1px solid " + C.border + "30"}}>
+                      <td style={{...cellP,fontSize:12,color:C.white,fontWeight:600}}>{s.label}</td>
+                      <td style={{...cellP,...mono,color:C.white}}>{evNum(s.runs)}</td>
+                      <td style={{...cellP,...mono,color:C.mutedHigh}}>{evNum(s.rows_fetched)}</td>
+                      <td style={{...cellP,...mono,color:C.mutedHigh}}>{evNum(s.rows_inserted)}</td>
+                      <td style={{...cellP,...mono,color:C.mutedHigh}}>{evNum(s.rows_skipped)}</td>
+                      <td style={{...cellP,...mono,color:s.rows_errored > 0 ? C.amber : C.mutedHigh}}>{evNum(s.rows_errored)}</td>
+                      <td style={cellP}>{Object.keys(s.status_counts || {}).map(function(k) {
+                        return <PartnerChip key={k} text={k + " " + s.status_counts[k]} color={String(k).toLowerCase().indexOf("fail") >= 0 ? C.red : C.green}/>;
+                      })}</td>
+                      <td style={{...cellP,...mono,color:C.mutedHigh}}>{evDate(s.last_started_at)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{fontSize:10,color:C.muted}}>Skipped and errored rows are shown exactly as each ingestor logged them.</div>
+      </PartnerPanel>
+
+      <PartnerPanel title="Detection activity">
+        {isDown("alerts") ? <Empty msg={DOWN_MSG}/> : (
+        <div>
+        <div style={{fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>Last 14 days</div>
+        {actTotal === 0 ? (
+          <div style={{fontSize:12,color:C.mutedHigh,marginBottom:14}}>
+            No new alerts in the last 14 days. Latest new alert: {evDate(al.last_alert_at)}.
+          </div>
+        ) : (
+          <div style={{marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"flex-end",gap:6,height:70,marginBottom:6}}>
+              {activity.map(function(d) {
+                var total = d.phenotypic + d.genomic;
+                return (
+                  <div key={d.date} title={d.date + ": " + d.phenotypic + " phenotypic, " + d.genomic + " genomic"}
+                    style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"flex-end",height:"100%"}}>
+                    <div style={{height: Math.round((d.genomic / actMax) * 60) + "px",background:C.purple,borderRadius:"2px 2px 0 0"}}/>
+                    <div style={{height: Math.max(total > 0 ? 2 : 0, Math.round((d.phenotypic / actMax) * 60)) + "px",background:C.teal}}/>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted}}>
+              <span>{activity.length ? activity[0].date : ""}</span><span>{activity.length ? activity[activity.length - 1].date : ""}</span>
+            </div>
+          </div>
+        )}
+        <div style={{fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:6}}>All-time alerts by signal type</div>
+        <div>
+          {Object.keys(al.by_signal_type || {}).map(function(k) {
+            return <PartnerChip key={k} text={String(k).replace(/_/g, " ") + " " + evNum(al.by_signal_type[k])} color={k === "genomic_precursor" ? C.purple : C.teal}/>;
+          })}
+        </div>
+        </div>
+        )}
+      </PartnerPanel>
+
+      <PartnerPanel title="Validation evidence">
+        {isDown("validations") ? <Empty msg={DOWN_MSG}/> : (
+        <div>
+        <div style={{fontSize:13,color:C.white,fontWeight:600,marginBottom:6}}>{valLine}</div>
+        {val.n > 0 && (
+          <div style={{fontSize:12,color:C.mutedHigh,lineHeight:1.6}}>
+            A retrospective backtest found these signals {val.avg_months} months before the official report, on average ({val.avg_days} days; range {val.min_days} to {val.max_days} days).
+            {" "}Sources: {(val.sources || []).join("; ")}.
+          </div>
+        )}
+        {val.n > 0 && (
+          <div style={{fontSize:10,color:C.muted,marginTop:6}}>
+            Lead time is measured retrospectively against published reports. It is not a record of prospective detection.
+          </div>
+        )}
+        {valThin && (
+          <div style={{marginTop:8,background:C.amberDim,border:"1px solid " + C.amber + "50",borderRadius:6,padding:"8px 12px",fontSize:11,color:C.amber,lineHeight:1.5}}>
+            Small sample: treat the average as indicative, not as a performance estimate.
+          </div>
+        )}
+        <div style={{fontSize:10,color:C.muted,marginTop:8}}>
+          Outcomes recorded on alerts: {evNum(al.outcome_confirmed)} confirmed, {evNum(al.outcome_false_positive)} marked false positive.
+        </div>
+        </div>
+        )}
+      </PartnerPanel>
+
+      <PartnerPanel title="Coverage and equity: focus countries">
+        {isDown("coverage") ? <Empty msg={DOWN_MSG}/> : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:12}}>
+          {focus.map(function(f) {
+            return (
+              <div key={f.country_iso3} style={{background:C.surfaceHigh,border:"1px solid " + C.border,borderRadius:6,padding:"12px 14px"}}>
+                <div style={{marginBottom:8}}><CountryCell iso3={f.country_iso3} size="lg"/></div>
+                {f.has_phenotypic ? (
+                  <div style={{fontSize:12,color:C.mutedHigh,lineHeight:1.7}}>
+                    <span style={{...mono,color:C.white}}>{evNum(f.records)}</span> phenotypic records, {evYears(f.first_year, f.last_year)}
+                    <div>Sources: {(f.sources || []).join(", ")}</div>
+                    <div>Records with n under 30: {evNum(f.records_low_n)}; n not reported: {evNum(f.records_no_n)}</div>
+                  </div>
+                ) : (
+                  <div style={{fontSize:12,color:C.amber,lineHeight:1.7}}>No phenotypic records on file.</div>
+                )}
+                <div style={{fontSize:12,color:C.mutedHigh,lineHeight:1.7}}>
+                  Genomic: {f.has_genomic ? evNum(f.genomic_rows) + " signal rows, " + evNum(f.genomic_isolates) + " isolates" : "none on file"}.
+                  {" "}Alerts: {evNum(f.alerts)}.
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        )}
+      </PartnerPanel>
+
+      <PartnerPanel title="Coverage and equity: records by region">
+        {isDown("coverage") ? <Empty msg={DOWN_MSG}/> : regions.map(function(r) {
+          var w = phenoTotal > 0 ? Math.max(1, Math.round((r.records / phenoTotal) * 100)) : 0;
+          return (
+            <div key={r.region} style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+              <div style={{width:80,fontSize:11,color:r.region === "UNMAPPED" ? C.amber : C.white,...mono}}>{r.region}</div>
+              <div style={{flex:1,background:C.surfaceHigh,borderRadius:3,height:10}}>
+                <div style={{width:w + "%",height:10,borderRadius:3,background:r.region === "AFRO" ? C.green : C.teal}}/>
+              </div>
+              <div style={{width:150,fontSize:11,color:C.mutedHigh,textAlign:"right",...mono}}>
+                {evNum(r.records)} ({evPct(r.records, phenoTotal)}), {r.countries} countries
+              </div>
+            </div>
+          );
+        })}
+        <div style={{fontSize:10,color:C.muted,marginTop:6}}>
+          Regions come from the record or, where missing, the dashboard country map. Countries the map does not cover appear as UNMAPPED.
+        </div>
+      </PartnerPanel>
+
+      <PartnerPanel title="Coverage by country">
+        {isDown("coverage") ? <Empty msg={DOWN_MSG}/> : (
+        <div>
+        <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10}}>
+          <input value={search} onChange={function(e) { setSearch(e.target.value); }} placeholder="Search country"
+            style={{background:C.surfaceHigh,border:"1px solid " + C.border,color:C.white,borderRadius:4,padding:"6px 10px",fontSize:12,width:220}}/>
+          <span style={{fontSize:11,color:C.muted}}>
+            {evNum(rows.length)} countries{totals.countries_genomic_only ? ", " + evNum(totals.countries_genomic_only) + " with genomic data only" : ""}
+          </span>
+        </div>
+        <div className="mob-scroll" style={{border:"1px solid " + C.border,borderRadius:6,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{background:C.surfaceHigh}}>
+                <PartnerTh>Country</PartnerTh><PartnerTh>Region</PartnerTh><PartnerTh>Records</PartnerTh><PartnerTh>Years</PartnerTh>
+                <PartnerTh>Sources</PartnerTh><PartnerTh>n under 30 or n/a</PartnerTh><PartnerTh>Genomic isolates</PartnerTh><PartnerTh>Flag</PartnerTh>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(function(c) {
+                var isFocus = c.country_iso3 === "NGA" || c.country_iso3 === "MWI";
+                var thin = c.records_low_n + c.records_no_n;
+                return (
+                  <tr key={c.country_iso3} style={{borderTop:"1px solid " + C.border + "30",background:isFocus ? C.blueDim + "40" : "transparent"}}>
+                    <td style={cellP}><CountryCell iso3={c.country_iso3} size="sm"/></td>
+                    <td style={{...cellP,...mono,color:C.mutedHigh}}>{String(c.region_who || COUNTRY_REGION[c.country_iso3] || "-").toUpperCase()}</td>
+                    <td style={{...cellP,...mono,color:C.white}}>{evNum(c.records)}</td>
+                    <td style={{...cellP,...mono,color:C.mutedHigh}}>{evYears(c.first_year, c.last_year)}</td>
+                    <td style={{...cellP,fontSize:11,color:C.mutedHigh}}>{(c.sources || []).join(", ") || "-"}</td>
+                    <td style={{...cellP,...mono,color:C.mutedHigh}}>{c.records > 0 ? evNum(thin) + " (" + evPct(thin, c.records) + ")" : "-"}</td>
+                    <td style={{...cellP,...mono,color:C.mutedHigh}}>{c.genomic_rows > 0 ? evNum(c.genomic_isolates) : "-"}</td>
+                    <td style={cellP}>{c.genomic_only ? <PartnerChip text="GENOMIC ONLY" color={C.purple}/> : null}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {!q && rows.length > 15 && (
+          <button onClick={function() { setShowAll(!showAll); }} style={{marginTop:10,background:"none",border:"1px solid " + C.border,color:C.mutedHigh,borderRadius:4,padding:"5px 12px",fontSize:11}}>
+            {showAll ? "Show top 15" : "Show all " + rows.length + " countries"}
+          </button>
+        )}
+        </div>
+        )}
+      </PartnerPanel>
+
+      <div style={{fontSize:10,color:C.muted,lineHeight:1.6,marginBottom:20}}>
+        {(data.notes || []).join(" ")}
+      </div>
+    </div>
+  );
+}
+
 // ─── Root App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen,      setScreen]      = useState("command");
@@ -2943,6 +3279,7 @@ export default function App() {
           {screen==="genomic"     && <GenomicIntelligence onInvestigate={handleInvestigate}/>}
           {screen==="investigate" && <AlertInvestigation  alert={invAlert}/>}
           {screen==="brief"       && <ExecutiveBrief      setScreen={setScreen}/>}
+          {screen==="evidence"    && <EvidenceScreen/>}
           {screen==="partners"    && <DataPartners/>}
         </main>
       </div>
