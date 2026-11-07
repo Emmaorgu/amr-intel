@@ -1,6 +1,6 @@
 /**
  * dashboard/src/App.jsx
- * AMR-Intel — 6-screen dashboard with Genomic Intelligence layer
+ * AMR-Intel — 7-screen dashboard with Genomic Intelligence layer and Data Partners readiness
  *
  * Screens:
  *   1. Command Center
@@ -9,6 +9,7 @@
  *   4. Genomic Intelligence  ← NEW
  *   5. Alert Investigation
  *   6. Executive Brief
+ *   7. Data Partners  ← NEW (partner-readiness: contract + dry-run validator)
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -342,6 +343,7 @@ const NAV = [
   { id:"genomic",     icon:"⬡", label:"Genomic Intelligence" },
   { id:"investigate", icon:"◎", label:"Alert Investigation" },
   { id:"brief",       icon:"▤", label:"Executive Brief" },
+  { id:"partners",    icon:"⇄", label:"Data Partners" },
 ];
 
 function Sidebar({ screen, setScreen, stats, genomicCount }) {
@@ -2472,6 +2474,393 @@ function ExecutiveBrief({ setScreen }) {
   );
 }
 
+// ─── Screen 7: Data Partners ─────────────────────────────────────────────────
+// Partner-readiness: data contract, identifier-refusing dry-run validator,
+// intake pipeline and privacy guarantees. Nothing here is synthetic: with no
+// facilities connected, the empty state is shown honestly.
+var PARTNER_MAX_BYTES = 10 * 1024 * 1024;
+
+var PARTNER_STEPS = [
+  { t:"Data contract",        d:"Versioned fields, formats and code mapping",           live:true  },
+  { t:"Dry-run validator",    d:"Identifier refusal, row checks, n-threshold preview",  live:true  },
+  { t:"Staging + quarantine", d:"Accepted isolates staged, rejects kept with reasons",  live:false },
+  { t:"Aggregation",          d:"Facility x pathogen x antibiotic x quarter, n >= 30",  live:false },
+  { t:"Source-tier promotion",d:"Tagged as facility submissions, never blended silently",live:false },
+  { t:"Alerts + feedback",    d:"Existing triage pipeline, then outcome feedback loop", live:false },
+];
+
+var PARTNER_PRIVACY = [
+  { t:"Identifiers refused", d:"A file with names, dates of birth, phone numbers, emails or raw hospital numbers is refused whole, not cleaned." },
+  { t:"Tokens, not IDs",     d:"Patient IDs must be hex digests hashed at the lab with a facility-held salt. The salt never leaves the facility." },
+  { t:"Nothing stored",      d:"The dry-run validator writes nothing to the database or disk and never echoes cell values back." },
+  { t:"Minimum sample size", d:"Groups below 30 first isolates get no resistance rate, so thin samples cannot produce inflated signals." },
+];
+
+var PARTNER_STATUS = {
+  accepted:              { label:"ACCEPTED",             color:C.green },
+  accepted_with_rejects: { label:"ACCEPTED WITH REJECTS", color:C.amber },
+  rejected:              { label:"REJECTED",             color:C.red   },
+  refused_identifiers:   { label:"REFUSED - IDENTIFIERS", color:C.red   },
+  unrecognised_format:   { label:"FORMAT NOT RECOGNISED", color:C.amber },
+  empty:                 { label:"EMPTY FILE",           color:C.amber },
+  binary_file:           { label:"NOT A TEXT FILE",      color:C.amber },
+};
+
+var PARTNER_TOKEN_SNIPPET = [
+  "import hmac, hashlib",
+  "token = hmac.new(FACILITY_SALT.encode(),",
+  "                 hospital_no.encode(),",
+  "                 hashlib.sha256).hexdigest()",
+].join("\n");
+
+function partnerReason(s) { return String(s || "").replace(/_/g, " "); }
+
+function PartnerChip({ text, color }) {
+  var col = color || C.mutedHigh;
+  return (
+    <span style={{
+      display:"inline-block", padding:"2px 8px", borderRadius:3, margin:"0 6px 6px 0",
+      background: col + "18", color: col, border:"1px solid " + col + "40",
+      fontFamily:"JetBrains Mono,monospace", fontSize:10, fontWeight:600,
+    }}>{text}</span>
+  );
+}
+
+function PartnerPanel({ title, children }) {
+  return (
+    <div style={{background:C.surface,border:"1px solid " + C.border,borderRadius:8,padding:"16px 18px",marginBottom:14}}>
+      <SectionTitle>{title}</SectionTitle>
+      {children}
+    </div>
+  );
+}
+
+function PartnerTh({ children }) {
+  return <th style={{padding:"8px 12px",textAlign:"left",color:C.muted,fontSize:10,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase"}}>{children}</th>;
+}
+
+function DataPartners() {
+  // hooks first (React hooks order rule)
+  const [contract, setContract] = useState(null);
+  const [loadingC, setLoadingC] = useState(true);
+  const [file,     setFile]     = useState(null);
+  const [busy,     setBusy]     = useState(false);
+  const [report,   setReport]   = useState(null);
+  const [err,      setErr]      = useState(null);
+  const [drag,     setDrag]     = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    apiFetch("/partners/contract").then(data => {
+      setContract(data);
+      setLoadingC(false);
+    });
+  }, []);
+
+  // computed values and handlers after hooks
+  var fields = (contract && contract.fields) || [];
+  var minN = (contract && contract.min_isolates_per_group) || 30;
+  var st = report ? (PARTNER_STATUS[report.status] || { label:String(report.status).toUpperCase(), color:C.amber }) : null;
+
+  function runValidate(f) {
+    if (!f) return;
+    setErr(null);
+    setReport(null);
+    if (f.size > PARTNER_MAX_BYTES) {
+      setErr("File is larger than the 10 MB limit.");
+      return;
+    }
+    setFile({ name: f.name, size: f.size });
+    setBusy(true);
+    fetch(API + "/partners/validate?filename=" + encodeURIComponent(f.name), {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: f,
+    })
+      .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j }; }); })
+      .then(function(res) {
+        if (res.ok) setReport(res.j);
+        else setErr((res.j && res.j.detail) || "Validation request failed.");
+        setBusy(false);
+      })
+      .catch(function() {
+        setErr("Could not reach the validation API.");
+        setBusy(false);
+      });
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setDrag(false);
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    runValidate(f);
+  }
+
+  function onPick(e) {
+    var f = e.target.files && e.target.files[0];
+    runValidate(f);
+    e.target.value = "";
+  }
+
+  return (
+    <div className="fade-up" style={{padding:"20px 24px",maxWidth:1100}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10,marginBottom:16}}>
+        <div>
+          <h1 style={{fontSize:18,fontWeight:700,color:C.white}}>Data Partners</h1>
+          <div style={{fontSize:11,color:C.muted}}>Hospital and laboratory intake readiness: contract, validation and privacy guarantees</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{width:7,height:7,borderRadius:"50%",background:C.amber,display:"inline-block"}}/>
+          <span style={{fontSize:11,color:C.mutedHigh}}>No facilities connected. Pilot onboarding open.</span>
+          {contract && <PartnerChip text={"CONTRACT v" + contract.contract_version} color={C.teal}/>}
+        </div>
+      </div>
+
+      <PartnerPanel title="Intake pipeline">
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+          {PARTNER_STEPS.map(function(s, i) {
+            var col = s.live ? C.green : C.muted;
+            return (
+              <div key={s.t} style={{background:C.surfaceHigh,border:"1px solid " + (s.live ? C.green + "50" : C.border),borderRadius:6,padding:"10px 12px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                  <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:10,color:C.muted}}>{String(i + 1).padStart(2, "0")}</span>
+                  <span style={{fontFamily:"JetBrains Mono,monospace",fontSize:9,fontWeight:700,color:col,letterSpacing:".06em"}}>{s.live ? "LIVE" : "PLANNED"}</span>
+                </div>
+                <div style={{fontSize:12,fontWeight:600,color:C.white,marginBottom:3}}>{s.t}</div>
+                <div style={{fontSize:10,color:C.muted,lineHeight:1.45}}>{s.d}</div>
+              </div>
+            );
+          })}
+        </div>
+      </PartnerPanel>
+
+      <PartnerPanel title="Privacy guarantees">
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:10}}>
+          {PARTNER_PRIVACY.map(function(p) {
+            return (
+              <div key={p.t} style={{borderLeft:"2px solid " + C.teal,paddingLeft:10}}>
+                <div style={{fontSize:12,fontWeight:600,color:C.white,marginBottom:3}}>{p.t}</div>
+                <div style={{fontSize:11,color:C.mutedHigh,lineHeight:1.5}}>{p.d}</div>
+              </div>
+            );
+          })}
+        </div>
+      </PartnerPanel>
+
+      <PartnerPanel title="Data contract">
+        {loadingC ? <Spinner/> : !contract ? (
+          <Empty msg="Contract unavailable. The API is unreachable or the partners endpoints are not deployed yet."/>
+        ) : (
+          <div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:10,alignItems:"center",marginBottom:12}}>
+              <a href={API + "/partners/template.csv"} download style={{
+                background:C.blueDim,color:C.blue,border:"1px solid " + C.blue + "50",
+                borderRadius:4,padding:"5px 12px",fontSize:11,fontWeight:600,textDecoration:"none",
+              }}>Download CSV template</a>
+              <span style={{fontSize:11,color:C.muted}}>Accepted: plain CSV template (one row per result) or WHONET export (CSV or tab-delimited). Template has headers only.</span>
+            </div>
+            <div className="mob-scroll" style={{border:"1px solid " + C.border,borderRadius:6,overflow:"hidden",marginBottom:14}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead>
+                  <tr style={{background:C.surfaceHigh,borderBottom:"1px solid " + C.border}}>
+                    <PartnerTh>Field</PartnerTh><PartnerTh>Required</PartnerTh><PartnerTh>Format</PartnerTh><PartnerTh>Notes</PartnerTh>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fields.map(function(f) {
+                    return (
+                      <tr key={f.name} style={{borderBottom:"1px solid " + C.border + "30"}}>
+                        <td style={{padding:"8px 12px",fontFamily:"JetBrains Mono,monospace",fontSize:11,color:C.white}}>{f.name}</td>
+                        <td style={{padding:"8px 12px"}}><PartnerChip text={f.required ? "REQUIRED" : "OPTIONAL"} color={f.required ? C.amber : C.muted}/></td>
+                        <td style={{padding:"8px 12px",fontSize:11,color:C.mutedHigh}}>{f.format}</td>
+                        <td style={{padding:"8px 12px",fontSize:11,color:C.muted}}>{f.notes}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
+              <div>
+                <div style={{fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:6}}>Never accepted</div>
+                {(contract.never_accepted || []).map(function(n) { return <PartnerChip key={n} text={n} color={C.red}/>; })}
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.muted,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase",marginBottom:6}}>Patient token recipe (run at the lab)</div>
+                <pre style={{background:C.bg,border:"1px solid " + C.border,borderRadius:5,padding:"8px 10px",fontFamily:"JetBrains Mono,monospace",fontSize:10,color:C.mutedHigh,overflowX:"auto"}}>{PARTNER_TOKEN_SNIPPET}</pre>
+              </div>
+            </div>
+          </div>
+        )}
+      </PartnerPanel>
+
+      <PartnerPanel title="Dry-run validator">
+        <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+          Drop a file to see exactly how it would be handled. Nothing is stored. Files containing patient identifiers are refused.
+        </div>
+        <div
+          onClick={function() { if (inputRef.current) inputRef.current.click(); }}
+          onDragOver={function(e) { e.preventDefault(); setDrag(true); }}
+          onDragLeave={function() { setDrag(false); }}
+          onDrop={onDrop}
+          style={{
+            border:"1px dashed " + (drag ? C.accent : C.borderHigh), borderRadius:8,
+            background: drag ? C.blueDim + "60" : C.surfaceHigh,
+            padding:"26px 16px", textAlign:"center", cursor:"pointer", transition:"all .15s",
+          }}
+        >
+          <div style={{fontSize:13,color:C.white,fontWeight:600,marginBottom:4}}>
+            {busy ? "Validating..." : "Drop a CSV / TSV file here, or click to choose"}
+          </div>
+          <div style={{fontSize:10,color:C.muted}}>
+            {file ? file.name + " (" + Math.max(1, Math.round(file.size / 1024)) + " KB)" : "Max 10 MB. Excel files must be exported as CSV first."}
+          </div>
+          <input ref={inputRef} type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" onChange={onPick} style={{display:"none"}}/>
+        </div>
+
+        {busy && <Spinner/>}
+        {err && (
+          <div style={{marginTop:12,background:C.redDim,border:"1px solid " + C.red + "50",borderRadius:6,padding:"10px 14px",fontSize:12,color:C.red}}>{err}</div>
+        )}
+
+        {report && st && (
+          <div style={{marginTop:16}}>
+            <div style={{background:st.color + "15",border:"1px solid " + st.color + "50",borderRadius:6,padding:"12px 16px",marginBottom:14}}>
+              <div style={{fontFamily:"JetBrains Mono,monospace",fontSize:12,fontWeight:700,color:st.color,letterSpacing:".06em",marginBottom:4}}>{st.label}</div>
+              <div style={{fontSize:12,color:C.mutedHigh,lineHeight:1.5}}>{report.message}</div>
+              {report.format && <div style={{fontSize:10,color:C.muted,marginTop:6}}>Detected: {report.format === "whonet_wide" ? "WHONET export" : "plain CSV template"} ({report.delimiter}-delimited)</div>}
+            </div>
+
+            {report.identifiers && report.identifiers.found && (
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:8}}>Cell values are never shown. Only column names, kinds and row numbers are reported.</div>
+                <div className="mob-scroll" style={{border:"1px solid " + C.border,borderRadius:6,overflow:"hidden"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse"}}>
+                    <thead><tr style={{background:C.surfaceHigh}}><PartnerTh>Column</PartnerTh><PartnerTh>Finding</PartnerTh></tr></thead>
+                    <tbody>
+                      {report.identifiers.columns.map(function(c, i) {
+                        return (
+                          <tr key={"c" + i} style={{borderTop:"1px solid " + C.border + "30"}}>
+                            <td style={{padding:"8px 12px",fontFamily:"JetBrains Mono,monospace",fontSize:11,color:C.white}}>{c.column}</td>
+                            <td style={{padding:"8px 12px",fontSize:11,color:C.mutedHigh}}>{c.reason}</td>
+                          </tr>
+                        );
+                      })}
+                      {report.identifiers.content_hits.map(function(h, i) {
+                        return (
+                          <tr key={"h" + i} style={{borderTop:"1px solid " + C.border + "30"}}>
+                            <td style={{padding:"8px 12px",fontFamily:"JetBrains Mono,monospace",fontSize:11,color:C.white}}>{h.column}</td>
+                            <td style={{padding:"8px 12px",fontSize:11,color:C.mutedHigh}}>
+                              {h.count + " cell(s) look like " + partnerReason(h.kind) + " (e.g. data rows " + h.example_rows.join(", ") + ")"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {!(report.identifiers && report.identifiers.found) && report.counts && report.counts.isolates_total > 0 && (
+              <div>
+                <div className="stat-row" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+                  <StatCard label="Isolates read" value={report.counts.isolates_total} sub={report.counts.isolates_rejected + " rejected"} accent={C.teal}/>
+                  <StatCard label="Results accepted" value={report.counts.results_accepted} sub={report.counts.results_not_tested + " not tested"} accent={C.green}/>
+                  <StatCard label="Results rejected" value={report.counts.results_rejected} accent={report.counts.results_rejected > 0 ? C.amber : C.muted}/>
+                  <StatCard label="Eligible groups" value={report.groups_summary.eligible + " / " + report.groups_summary.total} sub={"n >= " + minN + " first isolates"} accent={report.groups_summary.eligible > 0 ? C.green : C.amber}/>
+                </div>
+
+                <div style={{fontSize:11,color:C.muted,marginBottom:14}}>
+                  {report.dedup.token_present
+                    ? "First-isolate de-duplication applied: " + report.dedup.duplicates_removed + " repeat isolate(s) removed (one per patient, organism and quarter)."
+                    : "No valid patient token: counts cannot be certified as first-isolate."}
+                  {report.counts.results_superseded > 0 ? " " + report.counts.results_superseded + " oxacillin result(s) superseded by cefoxitin for methicillin." : ""}
+                </div>
+
+                {report.groups.length > 0 && (
+                  <div style={{marginBottom:14}}>
+                    <SectionTitle>Groups that would be formed</SectionTitle>
+                    <div className="mob-scroll" style={{border:"1px solid " + C.border,borderRadius:6,overflow:"hidden",maxHeight:320,overflowY:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse"}}>
+                        <thead>
+                          <tr style={{background:C.surfaceHigh}}>
+                            <PartnerTh>Pathogen</PartnerTh><PartnerTh>Antibiotic</PartnerTh><PartnerTh>Quarter</PartnerTh>
+                            <PartnerTh>n</PartnerTh><PartnerTh>Status</PartnerTh><PartnerTh>% R</PartnerTh>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {report.groups.map(function(g, i) {
+                            return (
+                              <tr key={i} style={{borderTop:"1px solid " + C.border + "30"}}>
+                                <td style={{padding:"7px 12px",fontSize:12,color:C.white}}>{g.pathogen}</td>
+                                <td style={{padding:"7px 12px",fontSize:12,color:C.mutedHigh}}>{g.antibiotic}</td>
+                                <td style={{padding:"7px 12px",fontFamily:"JetBrains Mono,monospace",fontSize:11,color:C.mutedHigh}}>{g.quarter}</td>
+                                <td style={{padding:"7px 12px",fontFamily:"JetBrains Mono,monospace",fontSize:11,color:C.white}}>{g.n + " / " + minN}</td>
+                                <td style={{padding:"7px 12px"}}><PartnerChip text={g.eligible ? "ELIGIBLE" : "BELOW n"} color={g.eligible ? C.green : C.muted}/></td>
+                                <td style={{padding:"7px 12px",fontFamily:"JetBrains Mono,monospace",fontSize:11,color:g.flag ? C.red : C.white}} title={g.flag || ""}>
+                                  {g.eligible ? g.resistance_pct + "%" + (g.flag ? " !" : "") : "-"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    {report.groups_summary.total > report.groups.length && (
+                      <div style={{fontSize:10,color:C.muted,marginTop:6}}>Showing {report.groups.length} of {report.groups_summary.total} groups.</div>
+                    )}
+                  </div>
+                )}
+
+                {report.reject_reasons.length > 0 && (
+                  <div style={{marginBottom:14}}>
+                    <SectionTitle>Reject reasons</SectionTitle>
+                    {report.reject_reasons.map(function(r, i) {
+                      return (
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"6px 0",borderBottom:"1px solid " + C.border + "30",fontSize:12}}>
+                          <span style={{color:C.mutedHigh}}>{partnerReason(r.reason)} <span style={{color:C.muted,fontSize:10}}>({r.level})</span></span>
+                          <span style={{fontFamily:"JetBrains Mono,monospace",color:C.amber}}>{r.count}</span>
+                        </div>
+                      );
+                    })}
+                    {report.reject_samples.length > 0 && (
+                      <div style={{fontSize:10,color:C.muted,marginTop:8}}>
+                        Sample data rows: {report.reject_samples.slice(0, 8).map(function(s) { return s.row; }).join(", ")}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {report.columns && (report.columns.recognised.length > 0 || report.columns.unmapped.length > 0 || report.columns.numeric_only.length > 0) && !(report.identifiers && report.identifiers.found) && (
+              <div style={{marginBottom:14}}>
+                <SectionTitle>Columns</SectionTitle>
+                <div>
+                  {report.columns.recognised.map(function(c) { return <PartnerChip key={"r" + c} text={c} color={C.green}/>; })}
+                  {report.columns.ignored.map(function(c) { return <PartnerChip key={"i" + c} text={c + " (not used)"} color={C.muted}/>; })}
+                  {report.columns.unmapped.map(function(c) { return <PartnerChip key={"u" + c} text={c + " (unmapped)"} color={C.amber}/>; })}
+                  {report.columns.numeric_only.map(function(c) { return <PartnerChip key={"n" + c} text={c + " (numeric only)"} color={C.amber}/>; })}
+                </div>
+              </div>
+            )}
+
+            {report.warnings && report.warnings.length > 0 && (
+              <div>
+                <SectionTitle>Warnings</SectionTitle>
+                {report.warnings.map(function(w, i) {
+                  return <div key={i} style={{fontSize:11,color:C.mutedHigh,lineHeight:1.5,padding:"3px 0"}}>{"- " + w}</div>;
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </PartnerPanel>
+    </div>
+  );
+}
+
 // ─── Root App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen,      setScreen]      = useState("command");
@@ -2554,6 +2943,7 @@ export default function App() {
           {screen==="genomic"     && <GenomicIntelligence onInvestigate={handleInvestigate}/>}
           {screen==="investigate" && <AlertInvestigation  alert={invAlert}/>}
           {screen==="brief"       && <ExecutiveBrief      setScreen={setScreen}/>}
+          {screen==="partners"    && <DataPartners/>}
         </main>
       </div>
     </>

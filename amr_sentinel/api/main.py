@@ -12,6 +12,9 @@ Endpoints:
     GET  /resistance-trends
     GET  /lead-times
     GET  /emergence-radar
+    GET  /partners/contract
+    GET  /partners/template.csv
+    POST /partners/validate
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from amr_sentinel.api.partners_router import router as partners_router
 from amr_sentinel.db.database import SessionLocal, engine
 from amr_sentinel.db.models import (
     Alert, EmergenceScore, Feedback, ResistanceRecord, SignalValidation
@@ -54,9 +58,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Partner readiness: data contract, CSV template, stateless dry-run validator.
+app.include_router(partners_router)
 
 API_KEY = os.getenv("API_KEY", "")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
